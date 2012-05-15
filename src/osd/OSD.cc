@@ -266,6 +266,11 @@ int OSD::mkfs(const std::string &dev, const std::string &jdev, uuid_d fsid, int 
   ObjectStore *store = NULL;
   OSDSuperblock sb;
 
+  // did we already mkfs?
+  char val[80];
+  if (read_meta(dev, "ready", val, sizeof(val)) >= 0)
+    return 0;
+
   sb.cluster_fsid = fsid;
   sb.whoami = whoami;
 
