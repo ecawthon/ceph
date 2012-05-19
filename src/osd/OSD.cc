@@ -265,11 +265,6 @@ int OSD::mkfs(const std::string &dev, const std::string &jdev, uuid_d fsid, int 
   int ret;
   ObjectStore *store = NULL;
 
-  // did we already mkfs?
-  char val[80];
-  if (read_meta(dev, "ready", val, sizeof(val)) >= 0)
-    return 0;
-
   try {
     store = create_object_store(dev, jdev);
     if (!store) {
