@@ -66,7 +66,13 @@ class Paxos;
 
 
 // i am one state machine.
+/**
+ *
+ */
 class Paxos {
+  /**
+   * The Monitor to which this Paxos class is associated with.
+   */
   Monitor *mon;
 
   // my state machine info
@@ -82,9 +88,32 @@ class Paxos {
 
   // -- generic state --
 public:
-  const static int STATE_RECOVERING = 1;  // leader|peon: recovering paxos state
-  const static int STATE_ACTIVE     = 2;  // leader|peon: idle.  peon may or may not have valid lease
-  const static int STATE_UPDATING   = 3;  // leader|peon: updating to new value
+  /**
+   * @defgroup Paxos_h_states States on which the leader/peon may be.
+   * @{
+   */
+  /**
+   * Leader/Peon is in Paxos' Recovery state
+   */
+  const static int STATE_RECOVERING = 1;
+  /**
+   * Leader/Peon is idle, and the Peon may or may not have a valid lease.
+   */
+  const static int STATE_ACTIVE     = 2;
+  /**
+   * Leader/Peon is updating to a new value.
+   */
+  const static int STATE_UPDATING   = 3;
+ 
+  /**
+   * Obtain state name from constant value.
+   *
+   * @note This function will raise a fatal error if @p s is not
+   *	   a valid state value.
+   *
+   * @param s State value.
+   * @return The state's name.
+   */
   static const char *get_statename(int s) {
     switch (s) {
     case STATE_RECOVERING: return "recovering";
@@ -95,25 +124,112 @@ public:
   }
 
 private:
+  /**
+   * The state we are in.
+   */
   int state;
+  /**
+   * @} Paxos_h_states 
+   */
 
 public:
+  /**
+   * Check if we are recovering.
+   *
+   * @return 'true' if we are on the Recovering state; 'false' otherwise.
+   */
   bool is_recovering() const { return state == STATE_RECOVERING; }
+  /**
+   * Check if we are active.
+   *
+   * @return 'true' if we are on the Active state; 'false' otherwise.
+   */
   bool is_active() const { return state == STATE_ACTIVE; }
+  /**
+   * Check if we are updating.
+   *
+   * @return 'true' if we are on the Updating state; 'false' otherwise.
+   */
   bool is_updating() const { return state == STATE_UPDATING; }
 
 private:
-  // recovery (phase 1)
+  /**
+   * @defgroup Paxos_h_recovery_vars Common recovery-related member variables
+   * @note These variables are common to both the Leader and the Peons.
+   * @note We also call the Recovery Phase as Phase 1.
+   * @{
+   */
+  /**
+   *
+   */
   version_t first_committed;
+  /**
+   * Last Proposal Number
+   *
+   * @todo Expand description
+   */
   version_t last_pn;
+  /**
+   * Last committed value's version.
+   *
+   * On both the Leader and the Peons, this is the last value's version that 
+   * was accepted by a given quorum and thus committed, that this instance 
+   * knows about.
+   *
+   * @note It may not be the last committed value's version throughout the
+   *	   system. If we are a Peon, we may have not been part of the quorum
+   *	   that accepted the value, and for this very same reason we may still
+   *	   be a (couple of) version(s) behind, until we learn about the most
+   *	   recent version.
+   */
   version_t last_committed;
+  /**
+   * Last committed value's time.
+   *
+   * When the commit happened.
+   */
   utime_t last_commit_time;
+  /**
+   * The last Proposal Number we have accepted.
+   *
+   * On the Leader, it will be the Proposal Number picked by the Leader 
+   * itself. On the Peon, however, it will be the proposal sent by the Leader
+   * and it will only be updated iif its value is higher than the one
+   * already known by the Peon.
+   */
   version_t accepted_pn;
+  /**
+   * @todo This has something to do with the last_committed version. Not sure
+   *	   about what it entails, tbh.
+   */
   version_t accepted_pn_from;
-  map<int,version_t> peer_first_committed, peer_last_committed;
+  /**
+   * @todo Check out if this map has any purpose at all. So far, we have only
+   *	   seen it being read, although it is never affected.
+   */
+  map<int,version_t> peer_first_committed;
+  /**
+   * Map holding the last committed version by each quorum member.
+   *
+   * The versions kept in this map are updated during the collect phase.
+   * When the Leader starts the collect phase, each Peon will reply with its
+   * last committed version, which will then be kept in this map.
+   */
+  map<int,version_t> peer_last_committed;
+  /**
+   * @todo Check out what 'slurping' is.
+   */
   int slurping;
 
   // active (phase 2)
+  /**
+   * When does our read lease expires.
+   *
+   * Instead of performing a full commit each time a read is requested, we
+   * keep leases. Each lease will have an expiration date, which may or may
+   * not be extended. This member variable will keep when is the lease 
+   * expiring.
+   */
   utime_t lease_expire;
   list<Context*> waiting_for_active;
   list<Context*> waiting_for_readable;
