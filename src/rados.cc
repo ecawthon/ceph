@@ -1346,45 +1346,40 @@ static int rados_tool_common(const std::map < std::string, std::string > &opts,
     cout << "load-gen will run " << lg.run_length << " seconds" << std::endl;
     lg.run();
     lg.cleanup();
-  }else if (strcmp(nargs[0], "listomap") == 0) {
+  } else if (strcmp(nargs[0], "listomap") == 0) {
     if (!pool_name || nargs.size() < 2)
       usage_exit();
-    int * err = new int(ret);
 
-    librados::ObjectReadOperation * read = new librados::ObjectReadOperation();
-    set<string> *out_keys= new set<string>();
-    read->omap_get_keys("",LONG_MAX,out_keys,err);
-    io_ctx.operate(nargs[1],read,NULL);
-    delete read;
-    if (*err < 0) {
-      cerr << "error getting omap key set " << pool_name << "/" << nargs[1] << ": " << strerror_r(-*err, buf, sizeof(buf)) << std::endl;
+    librados::ObjectReadOperation read;
+    set<string> out_keys;
+    read.omap_get_keys("", LONG_MAX, &out_keys, &ret);
+    io_ctx.operate(nargs[1], &read, NULL);
+    if (ret < 0) {
+      cerr << "error getting omap key set " << pool_name << "/" << nargs[1] << ": "
+	  << strerror_r(-ret, buf, sizeof(buf)) << std::endl;
       return 1;
     }
 
-    for (set<string>::iterator iter = out_keys->begin();
-	 iter != out_keys->end(); ++iter) {
+    for (set<string>::iterator iter = out_keys.begin();
+	 iter != out_keys.end(); ++iter) {
       cout << *iter << std::endl;
     }
-    delete out_keys;
-    ret = *err;
-    delete err;
-  }else if (strcmp(nargs[0],"getomap") == 0){
+  } else if (strcmp(nargs[0],"getomap") == 0){
       if (!pool_name || nargs.size() < 3)
 	usage_exit();
-      int * err = new int(ret);
-      librados::ObjectReadOperation * read = new librados::ObjectReadOperation();
+      librados::ObjectReadOperation read;
       set<string> in_keys;
-      map<string,bufferlist> *out_map = new map<string,bufferlist>();
+      map<string,bufferlist> out_map;
       in_keys.insert(nargs[2]);
-      read->omap_get_vals_by_keys(in_keys,out_map,err);
-      io_ctx.operate(nargs[1],read,NULL);
-      delete read;
-      if (*err < 0) {
-	cerr << "error getting omap key set " << pool_name << "/" << nargs[1] << ": " << strerror_r(-*err, buf, sizeof(buf)) << std::endl;
+      read.omap_get_vals_by_keys(in_keys, &out_map, &ret);
+      io_ctx.operate(nargs[1], &read, NULL);
+      if (ret < 0) {
+	cerr << "error getting omap key set " << pool_name << "/" << nargs[1] << ": "
+	    << strerror_r(-ret, buf, sizeof(buf)) << std::endl;
 	return 1;
       }
-      for (map<string,bufferlist>::iterator iter = out_map->begin();
-	       iter != out_map->end(); ++iter) {
+      for (map<string,bufferlist>::iterator iter = out_map.begin();
+	       iter != out_map.end(); ++iter) {
       cout << iter->second <<std::endl;
       }
     } else {
