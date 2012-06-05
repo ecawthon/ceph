@@ -25,56 +25,38 @@
 #include<iostream>
 #include<cassert>
 #include<climits>
+#include<cmath>
 
 using namespace std;
 using ceph::bufferlist;
 
 int OmapBench::setup(int argc, const char** argv) {
-  int r = rados.init(rados_id.c_str());
-  if (r < 0) {
-    return r;
-  }
-  r = rados.conf_read_file(NULL);
-  if (r < 0)
-    return r;
-  r = rados.conf_parse_argv(argc, argv);
-  if (r < 0)
-      return r;
-  r = rados.conf_parse_env(NULL);
-  if (r < 0)
-    return r;
-  r = rados.connect();
-  if (r < 0)
-    return r;
-  r = rados.ioctx_create(pool_name.c_str(), io_ctx);
-  if (r < 0) {
-    rados.shutdown();
-    return r;
-  }
-
-
   //parse omap_bench args
   vector<const char*> args;
   argv_to_vec(argc,argv,args);
   for (int i = 0;i < args.size(); i++) {
-    if (strcmp(args[i], "-t") == 0){
-      threads = atoi(args[i+1]);
-    } else if (strcmp(args[i],"-o") == 0){
-      objects = atoi(args[i+1]);
-    } else if (strcmp(args[i],"--entries") == 0){
-      omap_entries = atoi(args[i+1]);
-    } else if (strcmp(args[i],"--keysize") == 0){
-      omap_key_size = atoi(args[i+1]);
-    } else if (strcmp(args[i],"--valsize") == 0){
-      omap_value_size = atoi(args[i+1]);
-    } else if (strcmp(args[i],"--inc") == 0){
-      increment = atoi(args[i+1]);
-    } else if (strcmp(args[i],"--omaptype") == 0){
-      if(strcmp("rand",args[i+1]) == 0){
-	omap_generator = OmapBench::generate_non_uniform_omap;
-      }
-      else if (strcmp("uniform",args[i+1]) == 0){
-	omap_generator = OmapBench::generate_uniform_omap;
+    if(i < args.size() - 1){
+      if (strcmp(args[i], "-t") == 0){
+	threads = atoi(args[i+1]);
+      } else if (strcmp(args[i],"-o") == 0){
+	objects = atoi(args[i+1]);
+      } else if (strcmp(args[i],"--entries") == 0){
+	omap_entries = atoi(args[i+1]);
+      } else if (strcmp(args[i],"--keysize") == 0){
+	omap_key_size = atoi(args[i+1]);
+      } else if (strcmp(args[i],"--valsize") == 0){
+	omap_value_size = atoi(args[i+1]);
+      } else if (strcmp(args[i],"--inc") == 0){
+	increment = atoi(args[i+1]);
+      } else if (strcmp(args[i],"--omaptype") == 0){
+	if(strcmp("rand",args[i+1]) == 0){
+	  omap_generator = OmapBench::generate_non_uniform_omap;
+	}
+	else if (strcmp("uniform",args[i+1]) == 0){
+	  omap_generator = OmapBench::generate_uniform_omap;
+	}
+      } else if (strcmp(args[i],"--name") == 0){
+	rados_id = args[i+1];
       }
     } else if (strcmp(args[i],"--help") == 0){
       cout<< "\nUsage: omapbench [options]\n"
@@ -82,6 +64,7 @@ int OmapBench::setup(int argc, const char** argv) {
 	  << "object map write operations of\n"
 	  << "configurable size.\n\n"
 	  << "OPTIONS\n"
+	  << ""
 	  << "	-t              number of threads to use (default "<<threads;
       cout<<")\n"
 	  << "	-o              number of objects to write (default "<<objects;
@@ -103,11 +86,42 @@ int OmapBench::setup(int argc, const char** argv) {
       	  << "                        0 and the max size, uniform for all sizes"
       	  << " to be specified size.\n"
       	  << "                        (default "<<omap_value_size;
+      cout <<"\n  --name          the rados id to use (default "<<rados_id;
       cout<<")\n";
       exit(1);
     }
   }
-
+  int r = rados.init(rados_id.c_str());
+  if (r < 0) {
+    cout << "error during init"<<std::endl;
+    return r;
+  }
+  r = rados.conf_parse_argv(argc, argv);
+  if (r < 0){
+    cout << "error during parsing args" << std::endl;
+    return r;
+  }
+  r = rados.conf_parse_env(NULL);
+  if (r < 0){
+    cout << "error during parsing env" << std::endl;
+    return r;
+  }
+  r = rados.conf_read_file(NULL);
+  if (r < 0){
+    cout << "error during read file" << std::endl;
+    return r;
+  }
+  r = rados.connect();
+  if (r < 0){
+    cout << "error during connect" << std::endl;
+    return r;
+  }
+  r = rados.ioctx_create(pool_name.c_str(), io_ctx);
+  if (r < 0) {
+    cout << "error creating io ctx" << std::endl;
+    rados.shutdown();
+    return r;
+  }
   return 0;
 }
 
@@ -115,7 +129,7 @@ int OmapBench::setup(int argc, const char** argv) {
 Writer::Writer(OmapBench *omap_bench) : ob(omap_bench){
   stringstream name;
   ob->data_lock.Lock();
-  name << "object number " << ++(ob->data.started_ops);
+  name << omap_bench->prefix << ++(ob->data.started_ops);
   ob->data_lock.Unlock();
   oid = name.str();
 }
@@ -317,7 +331,7 @@ int OmapBench::print_written_omap(){
     set<string> out_keys;
     map<string, bufferlist> out_vals;
     std::stringstream objstrm;
-    objstrm << "object number ";
+    objstrm << prefix;
     objstrm << i;
     cout << "\nPrinting omap for "<<objstrm.str() << std::endl;
     key_read.omap_get_keys("", LONG_MAX, &out_keys, &err);
@@ -346,7 +360,7 @@ int OmapBench::print_written_omap(){
 }
 
 void OmapBench::print_results(){
-  cout << "==============================================================="
+  cout << "========================================================"
        << std::endl;
   cout << "\nNumber of object maps written:\t" << objects;
   cout << "\nNumber of threads used:\t\t" << threads;
@@ -368,14 +382,19 @@ void OmapBench::print_results(){
       ceil(data.max_latency / increment); i++){
     cout << ">= "<< i * increment;
     cout << "ms";
-    if (i * increment < 100) cout << "\t";
-    cout << "\t[";
+    int spaces;
+    if (i == 0) spaces = 4;
+    else spaces = 3 - floor(log10(i));
+    for (int j = 0; j < spaces; j++){
+      cout << " ";
+    }
+    cout << "[";
     for(int j = 0; j < ((data.freq_map)[i])*45/(data.mode.second); j++){
       cout << "*";
     }
     cout << std::endl;
   }
-  cout << "\n==============================================================="
+  cout << "\n========================================================"
        << std::endl;
 }
 

@@ -93,6 +93,7 @@ protected:
 
   string pool_name;
   string rados_id;
+  string prefix;
   int threads;
   int objects;
   int omap_entries;
@@ -109,6 +110,7 @@ public:
   thread_is_free_lock("thread is free lock"), data_lock("data lock"),
   threads(3),objects(100),omap_entries(10),omap_key_size(10),
   omap_value_size(100),increment(10),test(&OmapBench::write_objects_in_parallel)
+  ,prefix(rados_id+".obj.")
   {};
 
   /**
