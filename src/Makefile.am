@@ -217,9 +217,9 @@ omapbench_SOURCES = test/omap_bench.cc
 omapbench_LDADD = librados.la $(LIBGLOBAL_LDA)
 bin_DEBUGPROGRAMS += omapbench
 
-kvstoretest_SOURCES = key_value_store/kv_flat_btree.cc test/kv_store_test.cc
-kvstoretest_LDADD = librados.la $(LIBGLOBAL_LDA)
-bin_DEBUGPROGRAMS += kvstoretest
+kvstorebench_SOURCES = test/kv_store_bench.cc key_value_store/kv_flat_btree_async.cc
+kvstorebench_LDADD = librados.la $(LIBGLOBAL_LDA)
+bin_DEBUGPROGRAMS += kvstorebench
 
 multi_stress_watch_SOURCES = test/multi_stress_watch.cc test/rados-api/test.cc
 multi_stress_watch_LDADD = librados.la $(LIBGLOBAL_LDA)
@@ -473,6 +473,17 @@ libhadoopcephfs_la_CXXFLAGS = ${AM_CXXFLAGS}
 libhadoopcephfs_la_LDFLAGS = ${AM_LDFLAGS} -version-info 1:0:0 -export-symbols-regex 'hadoopcephfs_.*'
 lib_LTLIBRARIES += libhadoopcephfs.la
 endif
+
+## key_value_store classes
+
+# key_value_store: key value store class
+libcls_kvs_la_SOURCES = key_value_store/cls_kvs.cc
+libcls_kvs_la_CFLAGS = ${AM_CFLAGS}
+libcls_kvs_la_CXXFLAGS= ${AM_CXXFLAGS}
+libcls_kvs_la_LIBADD = $(PTHREAD_LIBS) $(EXTRALIBS)
+libcls_kvs_la_LDFLAGS = ${AM_LDFLAGS} -version-info 1:0:0 -export-symbols-regex '.*__cls_.*'
+
+radoslib_LTLIBRARIES += libcls_kvs.la
 
 ## System tests
 libsystest_la_SOURCES = \
