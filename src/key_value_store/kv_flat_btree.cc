@@ -22,6 +22,7 @@ using namespace std;
 using ceph::bufferlist;
 
 int KvFlatBtree::next(const string &key, string *ret) {
+  current_op << "getting next of " << key << std::endl;
   int err = 0;
   librados::ObjectReadOperation oro;
   std::set<string> keys;
@@ -57,6 +58,7 @@ int KvFlatBtree::next(const string &key, string *ret) {
  * @pre: oid is in the index
  */
 int KvFlatBtree::prev(const string &oid, string *ret) {
+  current_op << "getting prev of " << oid << std::endl;
   int err = 0;
   *ret = oid;
   librados::ObjectReadOperation oro;
@@ -87,6 +89,7 @@ int KvFlatBtree::prev(const string &oid, string *ret) {
 }
 
 int KvFlatBtree::oid(const string &key, string * oid) {
+  current_op << "getting oid for " << key << std::endl;
   librados::ObjectReadOperation oro;
   int err = 0;
   std::set<string> keys;
@@ -125,6 +128,7 @@ int KvFlatBtree::oid(const string &key, string * oid) {
 }
 
 bool KvFlatBtree::is_full(const string &oid){
+  current_op << "checking if " << oid << " is full" << std::endl;
   int err;
   librados::ObjectReadOperation oro;
   bufferlist size;
@@ -157,6 +161,7 @@ bool KvFlatBtree::is_full(const string &oid){
 }
 
 bool KvFlatBtree::is_half_empty(const string &oid) {
+  current_op << "checking if " << oid << " is half empty" << std::endl;
   int err;
   librados::ObjectReadOperation oro;
   bufferlist size;
@@ -177,14 +182,13 @@ bool KvFlatBtree::is_half_empty(const string &oid) {
     io_ctx.operate(oid, &setsize);
     size = zero;
   }
-  cout << oid << " has size " << atoi(string(size.c_str(), size.length()).c_str()) << std::endl;
   if (atoi(string(size.c_str(), size.length()).c_str()) < k) return true;
   return false;
 }
 
 int KvFlatBtree::split(const string &obj) {
+  current_op << "splitting " << obj << std::endl;
   int err = 0;
-  cout << "splitting object " << obj << std::endl;
   librados::ObjectReadOperation get_obj;
   map<string, bufferlist> contents;
   std::set<string> keys;
@@ -219,8 +223,6 @@ int KvFlatBtree::split(const string &obj) {
     cout << "splitting failed" << std::endl;
     return err;
   }
-  cout << "\tcreated new object " << name << " with size "
-      << string(size1_bfr.c_str(), size1_bfr.length()) << std::endl;
 
   bufferlist new_size;//this is the new size of the old (higher) object)
   stringstream new_size_strm;
@@ -239,10 +241,10 @@ int KvFlatBtree::split(const string &obj) {
   }
 
   ///REMOVE THIS PART WHEN NOT DEBUGGING - IT IS O(n)!
-  cout << "\tmoved the following keys from " << obj << " to " << name << std::endl;
+/*  cout << "\tmoved the following keys from " << obj << " to " << name << std::endl;
   for (std::set<string>::iterator it = keys.begin(); it != keys.end(); it++) {
     cout << "\t" << *it << std::endl;
-  }
+  }*/
 
   librados::ObjectWriteOperation update_map_object;
   map<string,bufferlist> map_obj_map;
@@ -257,19 +259,20 @@ int KvFlatBtree::split(const string &obj) {
 }
 
 int KvFlatBtree::rebalance(const string &oid) {
+  current_op << "rebalancing " << oid << std::endl;
   int err = 0;
   string next_obj;
   next(oid, &next_obj);
   if (oid == next_obj) {
     prev(oid, &next_obj);
     if (oid == next_obj) {
-      cout << "only one node - cannot rebalance" << std::endl;
-      return -1;
+      //cout << "only one node - cannot rebalance" << std::endl;
+      return 0;
     }
     rebalance(next_obj);
     return 0;
   }
-  cout << "rebalance: oid is " << oid << " , next_obj is " << next_obj << std::endl;
+  //cout << "rebalance: oid is " << oid << " , next_obj is " << next_obj << std::endl;
   map<string, bufferlist> kvs_to_add;
   std::map<string, bufferlist> next_obj_map;
   std::set<string> keys_to_rm;
@@ -290,9 +293,9 @@ int KvFlatBtree::rebalance(const string &oid) {
   oro.omap_get_vals("", k / 2 + 1, &next_obj_map, &err);
   io_ctx.operate(next_obj, &oro, NULL);
   if (err < 0) {
-   cout << "getting size failed with code " << err;
-   cout << std::endl;
-   return true;
+    cout << "getting size failed with code " << err;
+    cout << std::endl;
+    return true;
   }
   int next_obj_size =
       atoi(string(next_size.c_str(), next_size.length()).c_str());
@@ -306,6 +309,9 @@ int KvFlatBtree::rebalance(const string &oid) {
   map<string, bufferlist>::iterator it = big_map->begin();
 
   if (next_obj_size < oid_size && oid_size > k) {
+    current_op << "rebalancing: object to the right is smaller" << std::endl;
+    small = next_obj;
+    big = oid;
     small_map = &next_obj_map;
     big_map = &oid_kvs;
     small_size = next_obj_size;
@@ -314,15 +320,26 @@ int KvFlatBtree::rebalance(const string &oid) {
   }
 
   if (big_size > k) {
-    //next_obj has extra keys, so steal some from
-    cout << small << " is stealing from " << big << std::endl;
+    //big has extra keys, so steal some
+    //cout << small << " is stealing from " << big << std::endl;
+    bufferlist new_size;
+    stringstream new_size_strm;
+    bufferlist new_big_size;
+    stringstream new_big_size_strm;
+
     if (big_size - k == 1) {
       kvs_to_add.insert(*it);
+      keys_to_rm.insert(it->first);
+      new_size_strm << small_size + 1;
+      new_big_size_strm << big_size - 1;
     } else {
+      new_size_strm << small_size + (big_size - k) / 2;
+      new_big_size_strm << big_size - (big_size - k) / 2;
       for (int i = 0; i < (next_obj_size - k) / 2; i++) {
 	kvs_to_add.insert(*it);
 	keys_to_rm.insert(it->first);
 	++it;
+
 	//if (it == big_map->end() || it == big_map->rend()) break;
       }
     }
@@ -332,9 +349,6 @@ int KvFlatBtree::rebalance(const string &oid) {
 
     //create new object with all the keys
     librados::ObjectWriteOperation add_keys;
-    bufferlist new_size;
-    stringstream new_size_strm;
-    new_size_strm << small_size + (big_size - k) / 2;
     new_size.append(new_size_strm.str().c_str());
     add_keys.omap_set(kvs_to_add);
     add_keys.setxattr("size", new_size);
@@ -354,9 +368,6 @@ int KvFlatBtree::rebalance(const string &oid) {
 
     //remove keys from next_obj
     librados::ObjectWriteOperation rm_keys;
-    bufferlist new_big_size;
-    stringstream new_big_size_strm;
-    new_big_size_strm << big_size - (big_size - k) / 2;
     new_big_size.append(new_big_size_strm.str().c_str());
     rm_keys.omap_rm_keys(keys_to_rm);
     rm_keys.setxattr("size", new_big_size);
@@ -368,14 +379,14 @@ int KvFlatBtree::rebalance(const string &oid) {
     io_ctx.operate(oid, &rm_old_obj);
 
     ///REMOVE THIS PART WHEN NOT DEBUGGING - IT IS O(n)!
-    cout << "\tmoved the following keys from " << big << " to " << new_name << std::endl;
+    /*cout << "\tmoved the following keys from " << big << " to " << new_name << std::endl;
     for (std::set<string>::iterator it = keys_to_rm.begin();
 	it != keys_to_rm.end(); it++) {
       cout << "\t" << *it << std::endl;
-    }
+    }*/
   } else {
     //big has k or fewer entries, so we can safely merge the two.
-    cout << "merging " << small << " and " << big << std::endl;
+    //cout << "merging " << small << " and " << big << std::endl;
     librados::ObjectWriteOperation add_keys;
     stringstream new_next_size_strm;
     bufferlist new_next_size;
@@ -397,22 +408,29 @@ int KvFlatBtree::rebalance(const string &oid) {
   return err;
 }
 
-KvFlatBtree::KvFlatBtree(int k_val, const librados::IoCtx &ioctx)
-: k(k_val),
-  io_ctx(ioctx),
-  map_obj_name("index_object")
-{}
+KvFlatBtree& KvFlatBtree::operator=(const KvFlatBtree &kvb) {
+  if (this == &kvb) return *this;
+  k = kvb.k;
+  increment = kvb.increment;
+  io_ctx = kvb.io_ctx;
+  map_obj_name = kvb.map_obj_name;
+  current_op.clear();
+  current_op << "constructor";
+  return *this;
+}
 
 int KvFlatBtree::set(const string &key, const bufferlist &val,
-        bool update_on_existing) {
+    bool update_on_existing) {
+  current_op.clear();
+  current_op << "setting " << key << std::endl;
   int err = 0;
-  cout << "setting"  << std::endl;
+  //cout << "setting"  << std::endl;
   //make sure index exists
   librados::ObjectWriteOperation make_index;
   make_index.create(false);
   err = io_ctx.operate(map_obj_name, &make_index);
   if (err < 0) {
-    cout << "MAKING THE INDEX FAILED WITH CODE " << err << std::endl;
+    cout << "Making the index failed with code " << err << std::endl;
     return err;
   }
 
@@ -430,7 +448,7 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   librados::ObjectReadOperation checkread;
   std::set<string> duplicates;
   bufferlist size;
-  checkread.omap_get_keys(key,1,&duplicates,&err);
+  checkread.omap_get_keys("",LONG_MAX,&duplicates,&err);
   checkread.getxattr("size", &size, &err);
   err = io_ctx.operate(obj, &checkread, NULL);
   if (err < 0){
@@ -440,19 +458,23 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   }
 
   //handle duplicates
-  if (duplicates.size() != 0 && duplicates.count(key) == 1) {
+  if (duplicates.count(key) == 1) {
     if (!update_on_existing) {
-      cout << "key already exists, so exiting insert..." << std::endl;
+      //key already exists, so exit
       return -17;
     }
     else {
       librados::ObjectWriteOperation rm_dups;
-      rm_dups.omap_rm_keys(duplicates);
-      bufferlist sizestrm;
-      string size_str(size.c_str(), size.length());
-      sizestrm.append(atoi(size_str.c_str()) - 1);
-      size = sizestrm;
-      rm_dups.setxattr("size", sizestrm);
+      std::set<string> dups;
+      dups.insert(key);
+      rm_dups.omap_rm_keys(dups);
+      stringstream sizestrm;
+      bufferlist sizebfr;
+      string size_str1(size.c_str(), size.length());
+      sizestrm << atoi(size_str1.c_str()) - 1;
+      sizebfr.append(sizestrm.str());
+      size = sizebfr;
+      rm_dups.setxattr("size", sizebfr);
       err = io_ctx.operate(obj, &rm_dups);
       if (err < 0){
 	cout << "removing duplicates failed with code " << err;
@@ -466,7 +488,7 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   while (is_full(obj)){
     split(obj);
     oid(key, &obj);
-    cout << "\tnow " << key << " belongs in " << obj << std::endl;
+    //cout << "\tnow " << key << " belongs in " << obj << std::endl;
 
     librados::ObjectReadOperation checkread;
     checkread.getxattr("size", &size, &err);
@@ -482,15 +504,15 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   librados::ObjectWriteOperation owo;
   bufferlist size2;
   stringstream size2_strm;
-  string size_str(size.c_str(), size.length());
+  string size_str = string(size.c_str(), size.length());
   size2_strm << (atoi(size_str.c_str()) + 1);
   size2.append(size2_strm.str());
   owo.omap_set(to_insert);
   owo.setxattr("size",size2);
   err = io_ctx.operate(obj, &owo);
-  cout << "inserted " << key << " with value " << string(to_insert[key].c_str(),
-      to_insert[key].length()) << " into object " << obj << std::endl;
-  cout << "object " << obj << " now has size " << size2_strm.str() << std::endl;
+  //cout << "inserted " << key << " with value " << string(to_insert[key].c_str(),
+  //    to_insert[key].length()) << " into object " << obj << std::endl;
+  //cout << "object " << obj << " now has size " << size2_strm.str() << std::endl;
   if (err < 0) {
     //if (err == -17) err = 0;
     //else {
@@ -506,22 +528,10 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   return err;
 }
 
-int KvFlatBtree::set (const map<string,bufferlist> &kv_map,
-    bool update_on_existing) {
-  int err = 0;
-  for (map<string,bufferlist>::const_iterator it = kv_map.begin();
-      it != kv_map.end(); ++it) {
-    err = set((it->first), (it->second), update_on_existing);
-    if (err < 0) {
-      cout << "failed to insert " << it->first << ": " << err;
-      cout << std::endl;
-    }
-  }
-  return err;
-}
-
 //for now, we allow empty-ish nodes.
 int KvFlatBtree::remove(const string &key) {
+  current_op.clear();
+  current_op << "removing " << key << std::endl;
   int err = 0;
   librados::ObjectWriteOperation rm_op;
   std::set<string> to_remove;
@@ -554,8 +564,9 @@ int KvFlatBtree::remove(const string &key) {
     librados::ObjectWriteOperation rm_map;
     rm_map.omap_rm_keys(obj_set);
     io_ctx.operate(map_obj_name, &rm_map);
-    cout << "removing " << key << std::endl;
-    cout << "removing  object " << obj << std::endl;
+    io_ctx.operate(obj, &rm_op);
+    //cout << "removing " << key << std::endl;
+    //cout << "removing  object " << obj << std::endl;
   } else {
     rm_op.omap_rm_keys(to_remove);
     bufferlist new_size;
@@ -563,25 +574,26 @@ int KvFlatBtree::remove(const string &key) {
     new_size_strm << size_int - 1;
     new_size.append(new_size_strm.str().c_str());
     rm_op.setxattr("size", new_size);
-    cout << "removing " << key << std::endl;
     io_ctx.operate(obj, &rm_op);
     if(is_half_empty(obj)) {
       rebalance(obj);
     }
     return err;
   }
-  io_ctx.operate(obj, &rm_op);
-  cout << str();
+
   return err;
 }
 
 int KvFlatBtree::remove_all() {
+  current_op.clear();
+  current_op << "removing all" << std::endl;
   int err = 0;
   librados::ObjectReadOperation oro;
   std::set<string> index_set;
   oro.omap_get_keys("",LONG_MAX,&index_set,&err);
   err = io_ctx.operate(map_obj_name, &oro, NULL);
   if (err < 0){
+    if (err == -2) return 0;
     cout << "getting keys failed with error " <<err;
     cout << std::endl;
     return err;
@@ -592,32 +604,19 @@ int KvFlatBtree::remove_all() {
       librados::ObjectWriteOperation sub;
       sub.remove();
       io_ctx.operate(*it, &sub);
-      cout << "removed " << *it << std::endl;
+      //cout << "removed " << *it << std::endl;
     }
   }
   librados::ObjectWriteOperation rm_index;
   rm_index.remove();
   io_ctx.operate(map_obj_name, &rm_index);
-  cout << "removed the index" << std::endl;
-  return err;
-}
-
-
-int KvFlatBtree::remove(const std::set<string> &keys) {
-  int err = 0;
-  for (std::set<string>::iterator it = keys.begin();
-      it != keys.end(); ++it) {
-    err = remove(*it);
-    if (err < 0) {
-      cout << "failed to remove " << *it << ": " << err;
-      cout << std::endl;
-      return err;
-    }
-  }
+  //cout << "removed the index" << std::endl;
   return err;
 }
 
 int KvFlatBtree::get(const string &key, bufferlist *val) {
+  current_op.clear();
+  current_op << "getting " << key << std::endl;
   int err = 0;
   std::set<string> key_set;
   key_set.insert(key);
@@ -644,6 +643,8 @@ int KvFlatBtree::get(const string &key, bufferlist *val) {
 }
 
 int KvFlatBtree::get_all_keys(std::set<string> *keys) {
+  current_op.clear();
+  current_op << "getting all keys" << std::endl;
   int err = 0;
   librados::ObjectReadOperation oro;
   std::set<string> index_set;
@@ -666,6 +667,8 @@ int KvFlatBtree::get_all_keys(std::set<string> *keys) {
 }
 
 int KvFlatBtree::get_all_keys_and_values(map<string,bufferlist> *kv_map) {
+  current_op.clear();
+  current_op << "getting all keys and values" << std::endl;
   int err = 0;
   librados::ObjectReadOperation first_read;
   std::set<string> index_set;
@@ -821,18 +824,79 @@ int KvFlatBtree::get_key_vals_in_range(string min_key,
   return err;
 }
 
-/*bool is_consistent() {
+bool KvFlatBtree::is_consistent() {
   int err;
+  bool ret = true;
   std::set<string> keys;
+  map<string, std::set<string> > sub_objs;
   librados::ObjectReadOperation oro;
   oro.omap_get_keys("",LONG_MAX,&keys,&err);
   io_ctx.operate(map_obj_name, &oro, NULL);
-  if (err < 0 && err != -5){
-    cout << "getting keys failed with error " <<err;
-    cout << std::endl;
-    return false;
+  if (err < 0){
+    //probably because the index doesn't exist - this might be ok.
+    for (librados::ObjectIterator oit = io_ctx.objects_begin();
+        oit != io_ctx.objects_end(); ++oit) {
+      //if this executes, there are floating objects.
+      cout << "Not consistent! found floating object " << oit->first;
+      cout << std::endl;
+      ret = false;
+    }
+    return ret;
   }
-}*/
+
+  //make sure that an object exists iff it either is the index
+  //or is listed in the index
+  for (librados::ObjectIterator oit = io_ctx.objects_begin();
+      oit != io_ctx.objects_end(); ++oit) {
+    string name = oit->first;
+    if (name != map_obj_name && keys.count(name) == 0) {
+      cout << "Not consistent! found floating object " << name;
+      ret = false;
+    }
+  }
+
+  //check objects
+  string prev = "";
+  for (std::set<string>::iterator it = keys.begin(); it != keys.end(); ++it) {
+    librados::ObjectReadOperation read;
+    bufferlist size;
+    read.getxattr("size", &size, &err);
+    read.omap_get_keys("", LONG_MAX, &sub_objs[*it], &err);
+    io_ctx.operate(*it, &read, NULL);
+    int size_int = atoi(string(size.c_str(), size.length()).c_str());
+
+    //check that size is right
+    if (size_int != (int)sub_objs[*it].size()) {
+      cout << "Not consistent! Object " << *it << " has size xattr "
+	  << size_int << " when it contains " << sub_objs[*it].size()
+	  << " keys!" << std::endl;
+      ret = false;
+    }
+
+    //check that size is in the right range
+    if ((size_int > 2*k || size_int < k) && keys.size() > 1) {
+      cout << "Not consistent! Object " << *it << " has size " << size_int
+	  << ", which is outside the acceptable range." << std::endl;
+      ret = false;
+    }
+
+    //check that all keys belong in that object
+    for(std::set<string>::iterator subit = sub_objs[*it].begin();
+	subit != sub_objs[*it].end(); ++subit) {
+      if (*subit <= prev || *subit > *it) {
+	cout << "Not consistent! key " << *subit << " does not belong in "
+	    << *it << std::endl;
+	ret = false;
+      }
+    }
+  }
+
+  if (!ret) {
+    cout << "trace:" << std::endl << current_op << std::endl;
+    cout << str();
+  }
+  return ret;
+}
 
 string KvFlatBtree::str() {
   stringstream ret;

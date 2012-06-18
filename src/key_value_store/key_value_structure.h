@@ -30,25 +30,14 @@ public:
       bool update_on_existing) = 0;
 
   /**
-   * inserts any entries in the map that don't already exist.
-   *
-   * @param kv_map the map of keys and values to insert
-   * @param update_on_existing if true, update existing entries.
-   * otherwise, ignore them.
-   */
-  virtual int set(const map<string,bufferlist> &kv_map,
-      bool update_on_existing) = 0;
-
-  /**
    * removes the key-value for key. returns an error if key does not exist
    */
   virtual int remove(const string &key) = 0;
 
   /**
-   * removes a set of keys and their values. ignores any keys that did not
-   * exist
+   * removes all keys and values
    */
-  virtual int remove(const std::set<string> &keys) = 0;
+  virtual int remove_all() = 0;
 
   ////////////////READERS////////////////////
   /**
@@ -97,6 +86,11 @@ public:
    */
   virtual int get_key_vals_in_range(string min_key,
       string max_key, map<string,bufferlist> *kv_map, int max_keys) = 0;
+
+  /**
+   * True if the structure meets its own requirements for consistency.
+   */
+  virtual bool is_consistent() = 0;
 
 };
 

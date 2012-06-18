@@ -16,6 +16,9 @@
 using namespace std;
 using ceph::bufferlist;
 
+//typedef int (KvStoreTest::*kvs_test_t)();
+
+
 class KvStoreTest {
 protected:
   librados::IoCtx io_ctx;
@@ -24,39 +27,37 @@ protected:
   string pool_name;
   string rados_id;
   KvFlatBtree kvs;
+  //kvs_test_t test;
 
   int entries;
   int ops;
 
 public:
   KvStoreTest()
-  : k(5),
+  : k(10),
     pool_name("data"),
     rados_id("admin"),
     entries(100),
-    ops(100)
+    ops(100)//,
+ //   test(stress_tests)
   {}
 
   int setup(int argc, const char** argv);
 
-  int generate_small_non_random_omap(
-      std::map<std::string,bufferlist> * out_omap);
-
   string random_string(int len);
 
-  int generate_random_vector(vector<pair<string, bufferlist> > *ret);
   /**
-   * Test of correctness for the set and get methods that take a single
-   * key/value pair as arguments in KeyValueStructure. Stores two key/values,
-   * displays them, and then overwrites one of them, displaying the result.
+   * Test of correctness for the set, get, and remove methods. Stores two
+   * key/values, displays them, and then overwrites one of them,
+   * displaying the result.
    *
    * @return error code.
    */
   int test_set_get_rm_one_kv();
 
-  int test_set_get_kv_map();
+  int test_split_merge();
 
-  int test_many_single_ops();
+  int test_non_random_insert_gets();
 
   int test_random_insertions();
 
@@ -65,5 +66,7 @@ public:
   /**
    * Test correctness of all methods in KeyValueStructure
    */
-  int test_functionality();
+  int functionality_tests();
+
+  int stress_tests();
 };

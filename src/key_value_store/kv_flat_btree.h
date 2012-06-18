@@ -9,6 +9,7 @@
 #define KV_FLAT_BTREE_HPP_
 
 #include "key_value_store/key_value_structure.h"
+#include <sstream>
 
 using namespace std;
 using ceph::bufferlist;
@@ -19,6 +20,7 @@ protected:
   static int increment;
   librados::IoCtx io_ctx;
   string map_obj_name;
+  stringstream current_op;
 
   /**
    * returns the name of the next bucket that contains key
@@ -37,36 +39,40 @@ protected:
 
 public:
   KvFlatBtree()
-  : k(1)
+  : k(5)
   {}
 
-  KvFlatBtree(int k_val, const librados::IoCtx &ioctx);
+  KvFlatBtree(int k_val, const librados::IoCtx &ioctx)
+  : k(k_val),
+    io_ctx(ioctx),
+    map_obj_name("index_object"),
+    current_op("constructor")
+  {}
 
-  int set(const string &key, const bufferlist &val,
+  KvFlatBtree& operator=(const KvFlatBtree &kvb);
+
+  virtual int set(const string &key, const bufferlist &val,
         bool update_on_existing);
 
-  int set(const map<string,bufferlist> &kv_map,
-        bool update_on_existing);
+  virtual int remove(const string &key);
 
-  int remove(const string &key);
+  virtual int remove_all();
 
-  int remove(const std::set<string> &keys);
+  virtual int get(const string &key, bufferlist *val);
 
-  int remove_all();
+  virtual int get_all_keys(std::set<string> *keys);
 
-  int get(const string &key, bufferlist *val);
+  virtual int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 
-  int get_all_keys(std::set<string> *keys);
-
-  int get_all_keys_and_values(map<string,bufferlist> *kv_map);
-
-  int get_keys_in_range(const string &min_key, const string &max_key,
+  virtual int get_keys_in_range(const string &min_key, const string &max_key,
         std::set<string> *key_set, int max_keys);
 
-  int get_key_vals_in_range(string min_key,
+  virtual int get_key_vals_in_range(string min_key,
         string max_key, map<string,bufferlist> *kv_map, int max_keys);
 
-  string str();
+  virtual bool is_consistent();
+
+  virtual string str();
 
 };
 
