@@ -212,7 +212,7 @@ string OmapBench::random_string(int len) {
       "abcdefghijklmnopqrstuvwxyz";
 
   for (int i = 0; i < len; ++i) {
-    ret.push_back(alphanum[rand() % (alphanum.size()) - 1]);
+    ret.push_back(alphanum[rand() % (alphanum.size() - 1)]);
   }
 
   return ret;
@@ -259,9 +259,9 @@ int OmapBench::print_written_omap() {
 
 void OmapBench::print_results() {
   cout << "========================================================";
-  cout << "\nNumber ofs written:\t" << objects;
-  cout << "\nNumber of threads used:\t\t" << threads;
-  cout << "\nEntries per:\t\t" << entries_per_omap;
+  cout << "\nNumber of kvmaps written:\t" << objects;
+  cout << "\nNumber of ops at once:\t" << threads;
+  cout << "\nEntries per kvmap:\t\t" << entries_per_omap;
   cout << "\nCharacters per key:\t" << key_size;
   cout << "\nCharacters per val:\t" << value_size;
   cout << std::endl;
@@ -289,6 +289,7 @@ void OmapBench::print_results() {
     for(int j = 0; j < ((data.freq_map)[i])*45/(data.mode.second); j++) {
       cout << "*";
     }
+    cout << std::endl;
   }
   cout << "\n========================================================"
        << std::endl;
