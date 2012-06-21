@@ -54,9 +54,6 @@ int KvFlatBtree::next(const string &key, string *ret) {
   //(*ret)[ret->length() - 1] = static_cast<char>(key[key.length() - 1] + 2*k);
 }
 
-/**
- * @pre: oid is in the index
- */
 int KvFlatBtree::prev(const string &oid, string *ret) {
   current_op << "getting prev of " << oid << std::endl;
   int err = 0;
@@ -135,27 +132,9 @@ bool KvFlatBtree::is_full(const string &oid){
   oro.getxattr("size", &size, &err);
   io_ctx.operate(oid, &oro, NULL);
   if (err < 0) {
-    if (err == -2) {
-      librados::ObjectWriteOperation setsize;
-      bufferlist zero;
-      zero.append("0");
-      setsize.setxattr("size", zero);
-      io_ctx.operate(oid, &setsize);
-      size = zero;
-    }
-    else {
       cout << "isfull's read failed with " << err << std::endl;
       return false;
-    }
   }
-  /*if (size.length() == 0) {
-    librados::ObjectWriteOperation setsize;
-    bufferlist zero;
-    zero.append("0");
-    setsize.setxattr("size", zero);
-    io_ctx.operate(oid, &setsize);
-    size = zero;
-  }*/
   if (atoi(string(size.c_str(), size.length()).c_str()) >= 2*k) return true;
   return false;
 }
@@ -168,19 +147,9 @@ bool KvFlatBtree::is_half_empty(const string &oid) {
   oro.getxattr("size", &size, &err);
   io_ctx.operate(oid, &oro, NULL);
   if (err < 0) {
-    cout << "getting size failed with code " << err;
-    cout << std::endl;
-    return true;
-  }
-  //this should never be true
-  if (size.length() == 0) {
-    cout << "I SAID THIS SHOULD NEVER BE TRUE" << std::endl;
-    librados::ObjectWriteOperation setsize;
-    bufferlist zero;
-    zero.append("0");
-    setsize.setxattr("size", zero);
-    io_ctx.operate(oid, &setsize);
-    size = zero;
+      cout << "getting size failed with code " << err;
+      cout << std::endl;
+      return false;
   }
   if (atoi(string(size.c_str(), size.length()).c_str()) < k) return true;
   return false;
@@ -241,7 +210,8 @@ int KvFlatBtree::split(const string &obj) {
   }
 
   ///REMOVE THIS PART WHEN NOT DEBUGGING - IT IS O(n)!
-/*  cout << "\tmoved the following keys from " << obj << " to " << name << std::endl;
+/*  cout << "\tmoved the following keys from " << obj << " to " << name
+ * << std::endl;
   for (std::set<string>::iterator it = keys.begin(); it != keys.end(); it++) {
     cout << "\t" << *it << std::endl;
   }*/
@@ -379,7 +349,8 @@ int KvFlatBtree::rebalance(const string &oid) {
     io_ctx.operate(oid, &rm_old_obj);
 
     ///REMOVE THIS PART WHEN NOT DEBUGGING - IT IS O(n)!
-    /*cout << "\tmoved the following keys from " << big << " to " << new_name << std::endl;
+    /*cout << "\tmoved the following keys from " << big << " to " << new_name
+     * << std::endl;
     for (std::set<string>::iterator it = keys_to_rm.begin();
 	it != keys_to_rm.end(); it++) {
       cout << "\t" << *it << std::endl;
@@ -528,7 +499,6 @@ int KvFlatBtree::set(const string &key, const bufferlist &val,
   return err;
 }
 
-//for now, we allow empty-ish nodes.
 int KvFlatBtree::remove(const string &key) {
   current_op.clear();
   current_op << "removing " << key << std::endl;

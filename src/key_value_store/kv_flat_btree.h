@@ -14,7 +14,7 @@
 using namespace std;
 using ceph::bufferlist;
 
-class KvFlatBtree : KeyValueStructure{
+class KvFlatBtree : public KeyValueStructure{
 protected:
   int k;
   static int increment;
@@ -22,20 +22,69 @@ protected:
   string map_obj_name;
   stringstream current_op;
 
+
+
+  //Things that NEVER modify objects
   /**
-   * returns the name of the next bucket that contains key
+   * returns the name of the next bucket higher than the one to which key maps.
+   * If key is higher than the highest key in map_obj, ret = key.
+   *
+   * Does not modify any objects
+   *
+   * @param key the key to check
+   * @param ret next key will be stored here.
    */
-  int next(const string &key, string *ret);
-  int prev(const string &key, string *ret);
+  virtual int next(const string &key, string *ret);
 
-  //things that need to be atomic
-  int oid(const string &key, string * oid);
-  bool is_full(const string &oid);
-  bool is_half_empty(const string &oid);
+  /**
+   * returns the name of the highest bucket whose name is < oid. If oid is not
+   * in the index, ret = oid.
+   *
+   * Does not modify any objects
+   */
+  virtual int prev(const string &oid, string *ret);
 
-  //things that modify buckets
-  int split(const string &obj);
-  int rebalance(const string &oid);
+  /**
+   * Returns true if object oid has size >= 2k.
+   *
+   * @pre: oid exists (otherwise returns ENOENT)
+   */
+  virtual bool is_full(const string &oid);
+
+  /**
+   * Returns true if object oid has size < k.
+   *
+   * @pre: oid exits (otherwise returns ENOENT)
+   */
+  virtual bool is_half_empty(const string &oid);
+
+
+  //Things that OFTEN modify objects
+  /**
+   * sets oid to the name of the object in which key belongs.
+   *
+   * If key is higher than the max entry in the index, creates a new object
+   * called key and sets oid to that, and inserts that into the index.
+   *
+   */
+  virtual int oid(const string &key, string * oid);
+
+  //Things that ALWAYS modify objects
+  /**
+   * Splits obj into two objects, one with name obj and one with the name of
+   * the kth entry in obj.
+   *
+   * @post: the smaller object will have exactly k entries. The bigger object
+   * will have its original size - k entries.
+   */
+  virtual int split(const string &obj);
+
+  /**
+   * Rearranges entries s.t. oid has at least k entries.
+   *
+   *
+   */
+  virtual int rebalance(const string &oid);
 
 public:
   KvFlatBtree()
@@ -51,6 +100,11 @@ public:
 
   KvFlatBtree& operator=(const KvFlatBtree &kvb);
 
+  //modifiers
+
+  /**
+   * creates the index if it doesn't exist.
+   */
   virtual int set(const string &key, const bufferlist &val,
         bool update_on_existing);
 
@@ -58,6 +112,7 @@ public:
 
   virtual int remove_all();
 
+  //readers
   virtual int get(const string &key, bufferlist *val);
 
   virtual int get_all_keys(std::set<string> *keys);

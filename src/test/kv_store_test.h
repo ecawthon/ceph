@@ -21,12 +21,9 @@ using ceph::bufferlist;
 
 class KvStoreTest {
 protected:
-  librados::IoCtx io_ctx;
-  librados::Rados rados;
   int k;
-  string pool_name;
   string rados_id;
-  KvFlatBtree kvs;
+  KeyValueStructure * kvs;
   //kvs_test_t test;
 
   int entries;
@@ -34,13 +31,13 @@ protected:
 
 public:
   KvStoreTest()
-  : k(10),
-    pool_name("data"),
-    rados_id("admin"),
+  : k(1),
     entries(100),
     ops(100)//,
  //   test(stress_tests)
   {}
+
+  ~KvStoreTest();
 
   int setup(int argc, const char** argv);
 

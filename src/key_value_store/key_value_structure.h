@@ -92,6 +92,8 @@ public:
    */
   virtual bool is_consistent() = 0;
 
+  virtual string str() = 0;
+
 };
 
 
