@@ -15,37 +15,77 @@
 using namespace std;
 using ceph::bufferlist;
 
+struct prefix_data {
+  utime_t ts;
+  vector<pair<string, string> > to_create;
+  vector<pair<string, string> > to_delete;
+  bufferlist val;
+};
+
 class KvFlatBtreeAsync : public KvFlatBtree {
 protected:
   int k;
   string index_name;
   string rados_id;
-  string prefix;
-  int prefix_num;
+  string client_name;
+  int client_index;
+  char pair_init;
+  char sub_separator;
+  char pair_end;
+//  char separator;
+  char sub_terminator;
+  char terminator;
   librados::Rados rados;
   string pool_name;
 
   string to_string(string s, int i);
   bufferlist to_bl(string s);
   bufferlist to_bl(string s, int i);
+
+  /*
+   * should be in the format:
+   * timestamp
+   * sub_terminator
+   * objects to be created, organized into pair_init high key sub_separator
+   * obj name pair_end, separated by separators
+   * sub_terminator
+   * objects to be removed, organized into pair_init high key sub_separator
+   * obj name pair_end, separated by separators
+   * terminator
+   * value
+   */
+  bufferlist to_bl_f(string s);
   int bl_to_int(bufferlist *bl);
+  int parse_prefix(bufferlist * bl, prefix_data * ret);
+
+  int remove_obj(string obj);
+  int aio_remove_obj(string obj, librados::AioCompletion * a);
+
 
   //Things that NEVER modify objects
-  int next(const string &key, string *ret);
-  int prev(const string &oid, string *ret);
+  int next(const string &obj_high_key, const string &obj,
+      string * ret_high_key, string *ret);
+  int prev(const string &obj_high_key, const string &obj,
+      string * ret_high_key, string *ret);
   int oid(const string &key, bufferlist * raw_val);
   int oid(const string &key, bufferlist * raw_val, string * max_key);
 
   //Things that modify objects
-  int split(const string &obj);
-  int rebalance(const string &oid);
+  int split(const string &obj, const string &high_key);
+  int rebalance(const string &o1, const string &hk1);
 public:
   KvFlatBtreeAsync(int k_val, string rid)
   : k(k_val),
     index_name("index_object"),
     rados_id(rid),
-    prefix(string(rados_id).append(".")),
-    prefix_num(0),
+    client_name(string(rados_id).append(".")),
+    client_index(0),
+    pair_init('('),
+    sub_separator('|'),
+    pair_end(')'),
+//    separator(','),
+    sub_terminator(';'),
+    terminator(':'),
     pool_name("data")
   {}
 
