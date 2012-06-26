@@ -217,11 +217,10 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key) {
 
   //index updating
   librados::ObjectWriteOperation update_map_object;
-  //TODO: assert entry hasn't changed
   map<string,bufferlist> index_obj_map;
   index_keyset.insert(high_key);
-  index_obj_map.insert(pair<string,bufferlist>(key1, to_bl(o1w)));
-  index_obj_map.insert(pair<string,bufferlist>(key2, to_bl(o2w)));
+  index_obj_map.insert(pair<string,bufferlist>(key1, to_bl("0" + o1w)));
+  index_obj_map.insert(pair<string,bufferlist>(key2, to_bl("0" + o2w)));
   update_map_object.omap_set(index_obj_map);
   update_map_object.omap_rm_keys(index_keyset);
 
@@ -237,15 +236,16 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key) {
   std::map<string, bufferlist> prefixed;
   prefixed[high_key] = index_bl;
   librados::ObjectWriteOperation prefix_index;
-  //TODO: assert old value of index (should be high key -> obj)
+  map<string, pair<bufferlist, int> > assertions;
+  assertions[high_key] = pair<bufferlist, int>(to_bl("0"+obj),
+      CEPH_OSD_CMPXATTR_OP_EQ);
+  update_map_object.omap_cmp(assertions, &err);
   prefix_index.omap_set(prefixed);
 
 
   /////BEGIN CRITICAL SECTION/////
   //put prefix on index entry for obj
   io_ctx.operate(index_name, &prefix_index);
-
-  //TODO: clone the old object first
 
   //make new object with first half of keys
   librados::AioCompletion * aioc1 = rados.aio_create_completion();
@@ -397,7 +397,12 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1) {
   librados::ObjectWriteOperation write2;
   //index skeleton
   librados::ObjectWriteOperation prefix_index;
-  //TODO: assert index has expected values for both objects
+  map<string, pair<bufferlist, int> > assertions;
+  assertions[hk1] = pair<bufferlist, int>(to_bl("0"+o1),
+      CEPH_OSD_CMPXATTR_OP_EQ);
+  assertions[hk2] = pair<bufferlist, int>(to_bl("0"+o2),
+      CEPH_OSD_CMPXATTR_OP_EQ);
+  prefix_index.omap_cmp(assertions, &err);
   bufferlist index_bl;
   std::map<string,bufferlist> prefixed_entries;
 
@@ -509,8 +514,6 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1) {
   /////BEGIN CRITICAL SECTION/////
   //put prefix on index entry for obj
   io_ctx.operate(index_name, &prefix_index);
-
-  //TODO: clone the old object first
 
   //make new object with first half of keys
   librados::AioCompletion * aioc1 = rados.aio_create_completion();
