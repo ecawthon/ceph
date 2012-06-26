@@ -9,6 +9,8 @@
 #define KVFLATBTREEASYNC_H_
 
 #include "key_value_store/key_value_structure.h"
+#include "include/utime.h"
+#include "include/rados.h"
 #include <sstream>
 #include <stdarg.h>
 
@@ -17,6 +19,7 @@ using ceph::bufferlist;
 
 struct prefix_data {
   utime_t ts;
+  string prefix;
   vector<pair<string, string> > to_create;
   vector<pair<string, string> > to_delete;
   bufferlist val;
@@ -37,6 +40,7 @@ protected:
   char terminator;
   librados::Rados rados;
   string pool_name;
+  utime_t TIMEOUT;
 
   string to_string(string s, int i);
   bufferlist to_bl(string s);
@@ -57,6 +61,7 @@ protected:
   bufferlist to_bl_f(string s);
   int bl_to_int(bufferlist *bl);
   int parse_prefix(bufferlist * bl, prefix_data * ret);
+  int cleanup(const prefix_data &p, const int &errno);
 
   int remove_obj(string obj);
   int aio_remove_obj(string obj, librados::AioCompletion * a);
@@ -71,8 +76,8 @@ protected:
   int oid(const string &key, bufferlist * raw_val, string * max_key);
 
   //Things that modify objects
-  int split(const string &obj, const string &high_key);
-  int rebalance(const string &o1, const string &hk1);
+  int split(const string &obj, const string &high_key, int * ver);
+  int rebalance(const string &o1, const string &hk1, int *ver);
 public:
   KvFlatBtreeAsync(int k_val, string rid)
   : k(k_val),
@@ -86,7 +91,8 @@ public:
 //    separator(','),
     sub_terminator(';'),
     terminator(':'),
-    pool_name("data")
+    pool_name("data"),
+    TIMEOUT(utime_t(200))
   {}
 
 //  ~KvFlatBtreeAsync();
