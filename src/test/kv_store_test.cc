@@ -77,7 +77,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
 }
 
 KvStoreTest::~KvStoreTest() {
-  delete kvs;
+  //delete kvs;
 }
 
 string KvStoreTest::random_string(int len) {
@@ -96,40 +96,35 @@ string KvStoreTest::random_string(int len) {
 int KvStoreTest::test_set_get_rm_one_kv() {
   bufferlist val1;
   bufferlist val2;
-  val1.clear();
   val1.append("Value 1");
-  val2.clear();
-  stringstream two;
-  two << "Value 2";
-  val2.append(two.str());
-  string s(val2.c_str(), val2.length());
+  val2.append("Value 2");
   int err = kvs->set("Key 1", val1, true);
   if (err < 0){
-    cout << "setting Key 1 failed with code " << err;
+    cout << "[x] setting Key 1 failed with code " << err;
     cout << std::endl;
     return err;
   }
   if (!kvs->is_consistent()) {
     return -134;
   }
-  cout << "first set successful " << std::endl;
+  cout << "[v] first set successful " << std::endl;
 
   err = kvs->set("Key 2", val2, true);
   if (err < 0){
-    cout << "setting Key 2 failed with code " << err;
+    cout << "[x] setting Key 2 failed with code " << err;
     cout << std::endl;
     return err;
   }
   if (!kvs->is_consistent()) {
     return -134;
   }
-  cout << "second set successful " << std::endl;
+  cout << "[v] second set successful " << std::endl;
 
   bufferlist ret1;
   bufferlist ret2;
   err = kvs->get("Key 1", &ret1);
   if (err < 0){
-    cout << "getting Key 1 failed with code " << err;
+    cout << "[x] getting Key 1 failed with code " << err;
     cout << std::endl;
     return err;
   }
@@ -137,16 +132,16 @@ int KvStoreTest::test_set_get_rm_one_kv() {
   err = kvs->get("Key 2", &ret2);
   assert(kvs->is_consistent());
   if (err < 0){
-    cout << "getting Key 2 failed with code " << err;
+    cout << "[x] getting Key 2 failed with code " << err;
     cout << std::endl;
     return err;
   }
   if ("Value 1" == string(ret1.c_str(), ret1.length())
         && "Value 2" == string(ret2.c_str(), ret2.length())) {
-    cout << "gets successful" << std::endl;
+    cout << "[v] gets successful" << std::endl;
   }
   else {
-    cout << "gets did not return the same value" << std::endl;
+    cout << "[x] gets did not return the same value" << std::endl;
     return -134;
   }
 
@@ -155,11 +150,11 @@ int KvStoreTest::test_set_get_rm_one_kv() {
   val3.append("Value 3");
   err = kvs->set("Key 1", val3, false);
   if (err == -17){
-    cout << "test of exclusive set succeeded" << std::endl;
+    cout << "[v] test of exclusive set succeeded" << std::endl;
   }
   err = kvs->set("Key 1", val3, true);
   if (err < 0){
-    cout << "resetting Key 1 failed with code " << err;
+    cout << "[x] resetting Key 1 failed with code " << err;
     cout << std::endl;
     return err;
   }
@@ -168,14 +163,17 @@ int KvStoreTest::test_set_get_rm_one_kv() {
   }
   err = kvs->get("Key 1", &ret3);
   if (err < 0){
-    cout << "re-getting Key 1 failed with code " << err;
+    cout << "[x] re-getting Key 1 failed with code " << err;
     cout << std::endl;
     return err;
   }
   if ("Value 3" == string(ret3.c_str(), ret3.length())) {
-    cout << "Non-exclusive set succeeded" << std::endl;
+    cout << "[v] Non-exclusive set succeeded" << std::endl;
   } else {
-    cout << "Non-exclusive set failed" << std::endl;
+    cout << "[x] Non-exclusive set failed: "
+	<< "expected get(\"Key 1\") to return Value 3 but found "
+	<< string(ret3.c_str(), ret3.length()) << std::endl;
+    cout << kvs->str() << std::endl;
     return -134;
   }
 
@@ -183,12 +181,12 @@ int KvStoreTest::test_set_get_rm_one_kv() {
   if (!kvs->is_consistent()) {
     return -134;
   }
-  cout << "passed first removal" << std::endl;
+  cout << "[v] passed first removal" << std::endl;
   kvs->remove("Key 2");
   if (!kvs->is_consistent()) {
     return -134;
   }
-  cout << "passed removing test" << std::endl;
+  cout << "[v] passed removing test" << std::endl;
   return 0;
 }
 
@@ -200,7 +198,7 @@ int KvStoreTest::test_split_merge() {
     return err;
   }
   map<string, bufferlist> data;
-  for (int i = 0; i < 2 * k; ++i) {
+  for (int i = k; i < 3 * k; ++i) {
     stringstream key;
     stringstream valstrm;
     bufferlist val;
@@ -220,36 +218,71 @@ int KvStoreTest::test_split_merge() {
   stringstream nextkey;
   stringstream nextval;
   bufferlist nextvalbfr;
-  nextkey << "Key " << 2 * k + 1;
-  nextval << "Value " << 2 * k + 1;
+  nextkey << "Key " << 0;
+  nextval << "Value " << 0;
   nextvalbfr.append(nextval.str());
   data[nextkey.str()] = nextvalbfr;
   err = kvs->set(nextkey.str(), nextvalbfr, true);
   if (err < 0) {
-    cout << "Split failed with error " << err;
+    cout << "[x] Split failed with error " << err;
     return err;
   }
   if (!kvs->is_consistent()) {
-    cout << "Split failed - not consistent" << std::endl;
+    cout << "[x] Split failed - not consistent" << std::endl;
     err = -134;
     return err;
   }
-  cout << "Passed split test" << std::endl;
+  cout << "[v] Passed split test" << std::endl;
 
-  //now removing one key should make it shrink
+  for (int i = 1; i < k; ++i) {
+    stringstream key;
+    stringstream valstrm;
+    bufferlist val;
+    key << "Key " << i;
+    valstrm << "Value " << i;
+    val.append(valstrm.str().c_str());
+    data[key.str()] = val;
+    kvs->set(key.str(), val, true);
+    if (!kvs->is_consistent()) {
+      err = -134;
+      return err;
+    }
+  }
+
+  //now removing one key should make it rebalance...
+  cout << kvs->str() << std::endl;
   stringstream midkey;
-  midkey << "Key " << k;
+  midkey << "Key " << 1;
   err = kvs->remove(midkey.str());
   if (err < 0) {
-    cout << "Merge failed with error " << err;
+    cout << "[x] Rebalance failed with error " << err;
     return err;
   }
   if (!kvs->is_consistent()) {
     err = -134;
-    cout << "Merge failed - not consistent" << std::endl;
+    cout << "[x] Rebalance failed - not consistent" << std::endl;
     return err;
   }
-  cout << "passed merge test" << std::endl;
+  cout << kvs->str() << std::endl;
+  cout << "[v] passed rebalance test" << std::endl;
+
+  //keep removing keys until they have to merge...
+  for (int i = 3 * k; i > 2 * k; --i) {
+    stringstream key;
+    key << "Key " << i;
+    err = kvs->remove(key.str());
+    if (err < 0) {
+      cout << "[x] Merge failed with error " << err << std::endl;
+      return err;
+    }
+    if (!kvs->is_consistent()) {
+      err = -134;
+      cout << "[x] Merge failed with error" << err << std::endl;
+      return err;
+    }
+  }
+  cout << kvs->str() << std::endl;
+  cout << "[v] passed merge test" << std::endl;
   return err;
 }
 
@@ -292,7 +325,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     }
   }
   cout << "insertions complete." << std::endl;
-  cout << "Getting them back";
+  cout << "Getting them back" << std::endl;
 
   //get keys
   std::set<string> key_set;
@@ -389,7 +422,7 @@ int KvStoreTest::test_non_random_insert_gets() {
       err = -134;
     }
   }
-  cout << "insertions complete. Getting keys" << std::endl;
+  cout << "insertions complete." << std::endl << "Getting keys";
 
   //get keys
   key_set.clear();
@@ -448,11 +481,13 @@ int KvStoreTest::test_non_random_insert_gets() {
       err = -134;
     }
   }
-  cout << "getting values complete. Removing them..." << std::endl;
+  cout << std::endl << "getting values complete. Removing them...";
 
   //remove them in reverse order
   for (map<string,bufferlist>::reverse_iterator it = kvmap.rbegin();
       it != kvmap.rend(); ++it) {
+    cout << ".";
+    cout.flush();
     err = kvs->remove(it->first);
     if (err < 0) {
       cout << "error removing key: " << err;
@@ -465,6 +500,7 @@ int KvStoreTest::test_non_random_insert_gets() {
       err = -134;
     }
   }
+  cout << std::endl;
 
   if (passed) cout << "testing many key/values successful!" << std::endl;
   else cout << "testing many keys/values failed" << std::endl;
@@ -484,7 +520,12 @@ int KvStoreTest::test_random_insertions() {
     cout << ".";
     cout.flush();
     pair<string,bufferlist> this_pair = map_vector[i];
-    kvs->set(this_pair.first, this_pair.second, true);
+    err = kvs->set(this_pair.first, this_pair.second, true);
+    if (err < 0) {
+      cout << "setting " << this_pair.first << " failed with " << err
+	  << std::endl;
+      return err;
+    }
     if (!kvs->is_consistent()) {
       cout << "Random insertions failed - not consistent" << std::endl;
       return -134;
@@ -550,12 +591,13 @@ int KvStoreTest::functionality_tests() {
   }*/
   cout << "initial remove all successful" << std::endl;
   err = test_set_get_rm_one_kv();
+  cout << std::endl;
   if (err < 0) {
     cout << "set/getting one value failed with code " << err;
     cout << std::endl;
     return err;
   }
-  //err = test_split_merge();
+  err = test_split_merge();
   if (err < 0) {
     cout << "split/merge test failed with code " << err << std::endl;
     return err;
@@ -566,7 +608,7 @@ int KvStoreTest::functionality_tests() {
 int KvStoreTest::stress_tests() {
   int err = 0;
   kvs->remove_all();
-  err = test_non_random_insert_gets();
+  //err = test_non_random_insert_gets();
   if (err < 0) {
     cout << "non-random inserts and gets failed with code " << err;
     cout << std::endl;
@@ -591,9 +633,12 @@ int main(int argc, const char** argv) {
   KvStoreTest kvst;
   int err = kvst.setup(argc, argv);
   if (err == 0) cout << "setup successful" << std::endl;
-  else return err;
-  err = kvst.functionality_tests();
-  //if (err < 0) return err;
-  //kvst.stress_tests();
-  return 0;
+  else{
+    cout << "error " << err << std::endl;
+    return err;
+  }
+  /*err = kvst.functionality_tests();
+  if (err < 0) return err;
+  kvst.stress_tests();
+  return 0;*/
 };

@@ -58,7 +58,7 @@ protected:
    * terminator
    * value
    */
-  bufferlist to_bl_f(string s);
+  string to_string_f(string s);
   int bl_to_int(bufferlist *bl);
   int parse_prefix(bufferlist * bl, prefix_data * ret);
   int cleanup(const prefix_data &p, const int &errno);
@@ -76,7 +76,8 @@ protected:
   int oid(const string &key, bufferlist * raw_val, string * max_key);
 
   //Things that modify objects
-  int split(const string &obj, const string &high_key, int * ver);
+  int split(const string &obj, const string &high_key, int * ver,
+      map<string,bufferlist> * omap);
   int rebalance(const string &o1, const string &hk1, int *ver);
 public:
   KvFlatBtreeAsync(int k_val, string rid)
@@ -92,7 +93,7 @@ public:
     sub_terminator(';'),
     terminator(':'),
     pool_name("data"),
-    TIMEOUT(utime_t(200))
+    TIMEOUT(200,0)
   {}
 
 //  ~KvFlatBtreeAsync();
@@ -111,12 +112,6 @@ public:
   int get_all_keys(std::set<string> *keys);
 
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
-
-  int get_keys_in_range(const string &min_key, const string &max_key,
-        std::set<string> *key_set, int max_keys);
-
-  int get_key_vals_in_range(string min_key,
-        string max_key, map<string,bufferlist> *kv_map, int max_keys);
 
   bool is_consistent();
 

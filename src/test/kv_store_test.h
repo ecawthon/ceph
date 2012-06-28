@@ -31,7 +31,7 @@ protected:
 
 public:
   KvStoreTest()
-  : k(1),
+  : k(2),
     entries(100),
     ops(100)//,
  //   test(stress_tests)
