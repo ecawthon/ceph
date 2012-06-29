@@ -77,7 +77,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
 }
 
 KvStoreTest::~KvStoreTest() {
-  //delete kvs;
+  delete kvs;
 }
 
 string KvStoreTest::random_string(int len) {
@@ -608,7 +608,7 @@ int KvStoreTest::functionality_tests() {
 int KvStoreTest::stress_tests() {
   int err = 0;
   kvs->remove_all();
-  //err = test_non_random_insert_gets();
+  err = test_non_random_insert_gets();
   if (err < 0) {
     cout << "non-random inserts and gets failed with code " << err;
     cout << std::endl;
@@ -637,8 +637,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  /*err = kvst.functionality_tests();
+  err = kvst.functionality_tests();
   if (err < 0) return err;
   kvst.stress_tests();
-  return 0;*/
+  return 0;
 };

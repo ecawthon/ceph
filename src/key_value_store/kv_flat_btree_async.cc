@@ -239,7 +239,6 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   index_obj_map.insert(pair<string,bufferlist>(high_key, to_bl("0" + o2w)));
   current_op << "\t\t\tinsert (" << key1 << ",0" << o1w << ") and ("
       << high_key << ",0" << o2w << ")" << std::endl;
-  update_map_object.omap_cmp(assertions, &err);
   update_map_object.omap_set(index_obj_map);
   update_map_object.omap_rm_keys(index_keyset);
 
@@ -315,6 +314,7 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   //update the index
   librados::AioCompletion * index_aioc = rados.aio_create_completion();
   assertions[high_key].first = index_bl;
+  update_map_object.omap_cmp(assertions, &err);
   io_ctx.aio_operate(index_name, index_aioc, &update_map_object);
   index_aioc->wait_for_safe();
   err = index_aioc->get_return_value();
@@ -968,7 +968,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
     io_ctx.operate(it->first, &rm);
   }
 
-  /*librados::ObjectWriteOperation make_max_obj;
+  librados::ObjectWriteOperation make_max_obj;
   make_max_obj.create(false);
   //make_max_obj.setxattr("size", to_bl("",0));
   make_max_obj.setxattr("unwritable", to_bl("0"));
@@ -983,8 +983,8 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   if (r < 0) {
     cout << "Making the index failed with code " << r << std::endl;
     return r;
-  }*/
-
+  }
+/*
   librados::ObjectWriteOperation write;
   map<string,bufferlist> omap;
   bufferlist one;
@@ -1002,6 +1002,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   r = io_ctx.operate("object", &rewrite);
   cout << r << std::endl;
   return r;
+  */
 }
 
 //safe, theoretically
