@@ -40,26 +40,10 @@ protected:
   char terminator;
   librados::Rados rados;
   string pool_name;
+  vector<__useconds_t> waits;
+  int wait_index;
   utime_t TIMEOUT;
 
-  string to_string(string s, int i);
-  bufferlist to_bl(string s);
-  bufferlist to_bl(string s, int i);
-
-  /*
-   * should be in the format:
-   * timestamp
-   * sub_terminator
-   * objects to be created, organized into pair_init high key sub_separator
-   * obj name pair_end, separated by separators
-   * sub_terminator
-   * objects to be removed, organized into pair_init high key sub_separator
-   * obj name pair_end, separated by separators
-   * terminator
-   * value
-   */
-  string to_string_f(string s);
-  int bl_to_int(bufferlist *bl);
   int parse_prefix(bufferlist * bl, prefix_data * ret);
   int cleanup(const prefix_data &p, const int &errno);
 
@@ -80,11 +64,11 @@ protected:
       map<string,bufferlist> * omap);
   int rebalance(const string &o1, const string &hk1, int *ver);
 public:
-  KvFlatBtreeAsync(int k_val, string rid)
+  KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
-    rados_id(rid),
-    client_name(string(rados_id).append(".")),
+    rados_id("admin"),
+    client_name(string(name).append(".")),
     client_index(0),
     pair_init('('),
     sub_separator('|'),
@@ -93,11 +77,52 @@ public:
     sub_terminator(';'),
     terminator(':'),
     pool_name("data"),
+    TIMEOUT(2000000,0)
+  {}
+
+  KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait)
+  : k(k_val),
+    index_name("index_object"),
+    rados_id("admin"),
+    client_name(string(name).append(".")),
+    client_index(0),
+    pair_init('('),
+    sub_separator('|'),
+    pair_end(')'),
+//    separator(','),
+    sub_terminator(';'),
+    terminator(':'),
+    pool_name("data"),
+    waits(wait),
+    wait_index(0),
     TIMEOUT(200,0)
   {}
 
+  static string to_string(string s, int i);
+  static bufferlist to_bl(string s);
+  static bufferlist to_bl(string s, int i);
+
+  //~KvFlatBtreeAsync();
+
+  /*
+   * should be in the format:
+   * timestamp
+   * sub_terminator
+   * objects to be created, organized into pair_init high key sub_separator
+   * obj name pair_end, separated by separators
+   * sub_terminator
+   * objects to be removed, organized into pair_init high key sub_separator
+   * obj name pair_end, separated by separators
+   * terminator
+   * value
+   */
+  string to_string_f(string s);
+  static int bl_to_int(bufferlist *bl);
+
 //  ~KvFlatBtreeAsync();
   int setup(int argc, const char** argv);
+
+  void set_waits(const vector<__useconds_t> &wait);
 
   int set(const string &key, const bufferlist &val,
         bool update_on_existing);

@@ -66,19 +66,19 @@ int KvStoreTest::setup(int argc, const char** argv) {
 
   //KvFlatBtree * kvb = new KvFlatBtree(k,io_ctx);
   //kvs = kvb;
-  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
+  /*KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
   int err = kvba->setup(argc, argv);
   if (err < 0) {
     cout << "error during setup: " << err << std::endl;
     return err;
   }
-  kvs = kvba;
+  kvs = kvba;*/
   return 0;
 }
 
-KvStoreTest::~KvStoreTest() {
+/*KvStoreTest::~KvStoreTest() {
   delete kvs;
-}
+}*/
 
 string KvStoreTest::random_string(int len) {
   string ret;
@@ -583,6 +583,93 @@ int KvStoreTest::test_random_ops() {
   return err;
 }
 
+void *KvStoreTest::pset(void *ptr){
+  struct set_args *args = (struct set_args *)ptr;
+  int err = args->kvba->set((string)args->key, (bufferlist)args->val,
+      true);
+  if (err < 0) {
+    cout << "error " << err << std::endl;
+    return (void*)&err;
+  }
+  if (!args->kvba->is_consistent()) {
+    return (void*)-134;
+  }
+  return (void*)&err;
+}
+
+int KvStoreTest::test_concurrent_sets(int argc, const char** argv) {
+  int err = 0;
+  vector<__useconds_t> waits0(9);
+  vector<__useconds_t> waits1(9);
+  struct set_args set_args0;
+  struct set_args set_args1;
+  KvFlatBtreeAsync kvs0(1,"rados.0");
+  KvFlatBtreeAsync kvs1(1,"rados.1");
+
+
+  for (int i = 0; i < 9; i++) {
+    if (i > 0) {
+      waits0[i-1] = 0;
+    }
+    waits0[i] = 500;
+    for (int j = 0; j < 9; j++) {
+      if (i > 0) {
+        waits1[j-1] = 0;
+      }
+      waits1[j] = 500;
+      pthread_t thread0;
+      pthread_t thread1;
+
+      kvs0.set_waits(waits0);
+      kvs1.set_waits(waits1);
+      kvs0.setup(argc, argv);
+      kvs1.setup(argc, argv);
+      set_args0.kvba = &kvs0;
+      set_args1.kvba = &kvs1;
+      set_args0.key = KvFlatBtreeAsync::to_string("Key ",i);
+      set_args1.key = KvFlatBtreeAsync::to_string("Key ",9 + j);
+      set_args0.val = KvFlatBtreeAsync::
+	  to_bl(KvFlatBtreeAsync::to_string("Value ",i));
+      set_args1.val = KvFlatBtreeAsync::
+	  to_bl(KvFlatBtreeAsync::to_string("Value ",9 + j));
+
+      err = pthread_create(&thread0, NULL,
+	  pset, (void*)&set_args0);
+      if (err < 0) {
+	cout << "error creating first pthread: " << err << std::endl;
+	return err;
+      }
+      err = pthread_create(&thread1, NULL, pset, (void*)&set_args1);
+      if (err < 0) {
+	cout << "error creating second pthread: " << err << std::endl;
+	return err;
+      }
+      void *status0;
+      void *status1;
+      cout << "waiting to join writer of Key " << i << std::endl;
+      err = pthread_join(thread0, &status0);
+      if (err < 0) {
+	cout << "error joining first pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "waiting to join writer of Key " << 9 + j << std::endl;
+      err = pthread_join(thread1, &status1);
+      if (err < 0) {
+	cout << "error joining second pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "checking consistency" << std::endl;
+      if (!kvs0.is_consistent()) {
+	return -134;
+      }
+    }
+    cout << kvs0.str();
+    return err;
+  }
+  return err;
+}
+
+
 int KvStoreTest::functionality_tests() {
   int err = 0;
   //kvs->remove_all();
@@ -629,6 +716,15 @@ int KvStoreTest::stress_tests() {
   return err;
 }
 
+int KvStoreTest::verification_tests(int argc, const char** argv) {
+  int err = test_concurrent_sets(argc, argv);
+  if (err < 0) {
+    cout << "concurrent sets failed: " << err << std::endl;
+    return err;
+  }
+  return err;
+}
+
 int main(int argc, const char** argv) {
   KvStoreTest kvst;
   int err = kvst.setup(argc, argv);
@@ -637,8 +733,9 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.functionality_tests();
+  err = kvst.verification_tests(argc, argv);
+  //err = kvst.functionality_tests();
   if (err < 0) return err;
-  kvst.stress_tests();
+  //kvst.stress_tests();
   return 0;
 };

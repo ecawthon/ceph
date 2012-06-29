@@ -7,6 +7,7 @@
 
 #include "key_value_store/key_value_structure.h"
 #include "key_value_store/kv_flat_btree.h"
+#include "key_value_store/kv_flat_btree_async.h"
 #include "include/rados/librados.hpp"
 
 #include <string>
@@ -18,6 +19,11 @@ using ceph::bufferlist;
 
 //typedef int (KvStoreTest::*kvs_test_t)();
 
+struct set_args {
+  KvFlatBtreeAsync * kvba;
+  string key;
+  bufferlist val;
+};
 
 class KvStoreTest {
 protected:
@@ -37,7 +43,7 @@ public:
  //   test(stress_tests)
   {}
 
-  ~KvStoreTest();
+  //~KvStoreTest();
 
   int setup(int argc, const char** argv);
 
@@ -60,10 +66,16 @@ public:
 
   int test_random_ops();
 
+  static void *pset(void *ptr);
+
+  int test_concurrent_sets(int argc, const char** argv);
+
   /**
    * Test correctness of all methods in KeyValueStructure
    */
   int functionality_tests();
 
   int stress_tests();
+
+  int verification_tests(int argc, const char** argv);
 };
