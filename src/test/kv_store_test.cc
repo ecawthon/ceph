@@ -786,7 +786,7 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
       while(keys.count(rm_int) == 0) {
 	rm_int = rand() % count;
       }
-      rm_args1.key = bigmap[rm_int];
+      rm_args1.key = bigmap[rm_int].first;
       keys.erase(rm_int);
       bigmap.erase(rm_int);
 
@@ -877,9 +877,14 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
     cout << "concurrent sets failed: " << err << std::endl;
     return err;
   }
-  err = test_concurrent_set_rms(argc, argv);
+  //err = test_concurrent_set_rms(argc, argv);
   if (err < 0) {
     cout << "concurrent set/rms failed: " << err << std::endl;
+    return err;
+  }
+  //err = test_concurrent_random_set_rms(argc, argv);
+  if (err < 0) {
+    cout << "concurrent random set/rms failed: " << err << std::endl;
     return err;
   }
   return err;

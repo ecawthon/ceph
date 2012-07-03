@@ -62,6 +62,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
     rados.shutdown();
     return r;
   }
+  cout << "setup ok" << std::endl;
 
   librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
@@ -94,6 +95,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   read_obj.stat(psize, pmtime, &err);
   io_ctx.aio_operate("object", read_obj_aioc, &read_obj, NULL);
   read_obj_aioc->wait_for_safe();
+  int obj_ver = read_obj_aioc->get_version();
   cout << "read found version: " << read_obj_aioc->get_version()
       << " and error: " << read_obj_aioc->get_return_value() << std::endl;
 
@@ -101,6 +103,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   librados::AioCompletion * modify_obj_aioc = rados.aio_create_completion();
   to_set["key1"] = to_bl("value1");
   modify_obj.omap_set(to_set);
+  io_ctx.set_assert_version(obj_ver);
   io_ctx.aio_operate("object", modify_obj_aioc, &modify_obj);
   modify_obj_aioc->wait_for_safe();
   err = modify_obj_aioc->get_return_value();
@@ -108,6 +111,25 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
     cout << "second write failed with " << err << std::endl;
     return err;
   }
+  cout << "Second write finished. return value "
+      << modify_obj_aioc->get_return_value() << " version: "
+      << modify_obj_aioc->get_version() << std::endl;
+
+  librados::ObjectWriteOperation write_again;
+  librados::AioCompletion * write_again_obj_aioc = rados.aio_create_completion();
+  to_set["key2"] = to_bl("value2");
+  write_again.omap_set(to_set);
+  io_ctx.set_assert_version(obj_ver);
+  io_ctx.aio_operate("object", write_again_obj_aioc, &write_again);
+  write_again_obj_aioc->wait_for_safe();
+  err = write_again_obj_aioc->get_return_value();
+  if (err < 0) {
+    cout << "second write failed with " << err << std::endl;
+    return err;
+  }
+  cout << "Third write finished. return value "
+      << write_again_obj_aioc->get_return_value() << " version: "
+      << write_again_obj_aioc->get_version() << std::endl;
 
   librados::ObjectReadOperation read_obj_again;
   librados::AioCompletion * read_obj_again_aioc = rados.aio_create_completion();
@@ -116,8 +138,8 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   read_obj_again_aioc->wait_for_safe();
   cout << "read found version: " << read_obj_again_aioc->get_version()
       << " and error: " << read_obj_again_aioc->get_return_value() << std::endl;
-
-/*  librados::ObjectWriteOperation make_max_obj;
+/*
+  librados::ObjectWriteOperation make_max_obj;
   make_max_obj.create(true);
   //make_max_obj.setxattr("size", to_bl("",0));
   make_max_obj.setxattr("unwritable", to_bl("0"));
