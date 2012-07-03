@@ -25,6 +25,11 @@ struct set_args {
   bufferlist val;
 };
 
+struct rm_args {
+  KvFlatBtreeAsync * kvba;
+  string key;
+};
+
 class KvStoreTest {
 protected:
   int k;
@@ -68,7 +73,13 @@ public:
 
   static void *pset(void *ptr);
 
+  static void *prm(void *ptr);
+
   int test_concurrent_sets(int argc, const char** argv);
+
+  int test_concurrent_set_rms(int argc, const char** argv);
+
+  int test_concurrent_random_set_rms(int argc, const char** argv);
 
   /**
    * Test correctness of all methods in KeyValueStructure

@@ -66,13 +66,14 @@ int KvStoreTest::setup(int argc, const char** argv) {
 
   //KvFlatBtree * kvb = new KvFlatBtree(k,io_ctx);
   //kvs = kvb;
-  /*KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
+  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
   int err = kvba->setup(argc, argv);
   if (err < 0) {
     cout << "error during setup: " << err << std::endl;
     return err;
   }
-  kvs = kvba;*/
+  kvs = kvba;
+
   return 0;
 }
 
@@ -591,28 +592,37 @@ void *KvStoreTest::pset(void *ptr){
     cout << "error " << err << std::endl;
     return (void*)&err;
   }
-  if (!args->kvba->is_consistent()) {
-    return (void*)-134;
+  return (void*)&err;
+}
+
+void *KvStoreTest::prm(void *ptr) {
+  struct rm_args *args = (struct rm_args *)ptr;
+  int err = args->kvba->remove((string)args->key);
+  if (err < 0) {
+    cout << "error " << err << std::endl;
+    return (void*)&err;
   }
   return (void*)&err;
 }
 
 int KvStoreTest::test_concurrent_sets(int argc, const char** argv) {
   int err = 0;
-  vector<__useconds_t> waits0(9);
-  vector<__useconds_t> waits1(9);
+  vector<__useconds_t> waits0(35,(__useconds_t)10);
+  vector<__useconds_t> waits1(35,(__useconds_t)10);
   struct set_args set_args0;
   struct set_args set_args1;
-  KvFlatBtreeAsync kvs0(1,"rados.0");
-  KvFlatBtreeAsync kvs1(1,"rados.1");
+  KvFlatBtreeAsync kvs0(2,"rados.0", waits0);
+  KvFlatBtreeAsync kvs1(2,"rados.1", waits1);
+  kvs0.setup(argc, argv);
+  kvs1.setup(argc, argv);
 
 
-  for (int i = 0; i < 9; i++) {
+  for (int i = 0; i < 5; i++) {
     if (i > 0) {
       waits0[i-1] = 0;
     }
     waits0[i] = 500;
-    for (int j = 0; j < 9; j++) {
+    for (int j = 0; j < 5; j++) {
       if (i > 0) {
         waits1[j-1] = 0;
       }
@@ -622,16 +632,14 @@ int KvStoreTest::test_concurrent_sets(int argc, const char** argv) {
 
       kvs0.set_waits(waits0);
       kvs1.set_waits(waits1);
-      kvs0.setup(argc, argv);
-      kvs1.setup(argc, argv);
       set_args0.kvba = &kvs0;
       set_args1.kvba = &kvs1;
-      set_args0.key = KvFlatBtreeAsync::to_string("Key ",i);
-      set_args1.key = KvFlatBtreeAsync::to_string("Key ",9 + j);
+      set_args0.key = random_string(5);
+      set_args1.key = random_string(5);
       set_args0.val = KvFlatBtreeAsync::
-	  to_bl(KvFlatBtreeAsync::to_string("Value ",i));
+	  to_bl(random_string(7));
       set_args1.val = KvFlatBtreeAsync::
-	  to_bl(KvFlatBtreeAsync::to_string("Value ",9 + j));
+	  to_bl(random_string(7));
 
       err = pthread_create(&thread0, NULL,
 	  pset, (void*)&set_args0);
@@ -663,12 +671,159 @@ int KvStoreTest::test_concurrent_sets(int argc, const char** argv) {
 	return -134;
       }
     }
-    cout << kvs0.str();
-    return err;
   }
+  //cout << kvs0.str();
   return err;
 }
 
+int KvStoreTest::test_concurrent_set_rms(int argc, const char** argv){
+  int err = 0;
+  int wait_size_0 = 35;
+  int wait_size_1 = 21;
+  vector<__useconds_t> waits0(wait_size_0,(__useconds_t)10);
+  vector<__useconds_t> waits1(wait_size_1,(__useconds_t)10);
+  struct set_args set_args0;
+  struct set_args set_args1;
+  KvFlatBtreeAsync kvs0(2,"rados.0", waits0);
+  KvFlatBtreeAsync kvs1(2,"rados.1", waits1);
+  kvs0.setup(argc, argv);
+  kvs1.setup(argc, argv);
+
+  for (int i = 0; i < 1; i++) {
+    if (i > 0) {
+      waits0[i-1] = 0;
+    }
+    waits0[i] = 500;
+    for (int j = 0; j < wait_size_1; j++) {
+      if (i > 0) {
+        waits1[j-1] = 0;
+      }
+      waits1[j] = 500;
+      pthread_t thread0;
+      pthread_t thread1;
+
+      kvs0.set_waits(waits0);
+      kvs1.set_waits(waits1);
+      set_args0.kvba = &kvs0;
+      set_args1.kvba = &kvs1;
+      set_args0.key = KvFlatBtreeAsync::to_string("Key ",i);
+      set_args1.key = KvFlatBtreeAsync::to_string("Key ",i - 2);
+      set_args0.val = KvFlatBtreeAsync::
+	  to_bl(KvFlatBtreeAsync::to_string("Value ",i));
+
+      err = pthread_create(&thread0, NULL,
+	  pset, (void*)&set_args0);
+      if (err < 0) {
+	cout << "error creating first pthread: " << err << std::endl;
+	return err;
+      }
+      err = pthread_create(&thread1, NULL, prm, (void*)&set_args1);
+      if (err < 0) {
+	cout << "error creating second pthread: " << err << std::endl;
+	return err;
+      }
+      void *status0;
+      void *status1;
+      cout << "waiting to join writer of Key " << i << std::endl;
+      err = pthread_join(thread0, &status0);
+      if (err < 0) {
+	cout << "error joining first pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "waiting to join writer of Key " << 9 + j << std::endl;
+      err = pthread_join(thread1, &status1);
+      if (err < 0) {
+	cout << "error joining second pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "checking consistency" << std::endl;
+      if (!kvs0.is_consistent()) {
+	return -134;
+      }
+    }
+  }
+  cout << kvs0.str();
+  return err;
+}
+
+int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
+  int err = 0;
+  vector<__useconds_t> waits0(35,(__useconds_t)10);
+  vector<__useconds_t> waits1(35,(__useconds_t)10);
+  struct set_args set_args0;
+  struct rm_args rm_args1;
+  KvFlatBtreeAsync kvs0(2,"rados.0", waits0);
+  KvFlatBtreeAsync kvs1(2,"rados.1", waits1);
+  kvs0.setup(argc, argv);
+  kvs1.setup(argc, argv);
+  std::set<int> keys;
+  map<int, pair<string, bufferlist> > bigmap;
+  int count;
+  for (int i = 0; i < 5; i++) {
+    if (i > 0) {
+      waits0[i-1] = 0;
+    }
+    waits0[i] = 500;
+    for (int j = 0; j < 5; j++) {
+      if (i > 0) {
+        waits1[j-1] = 0;
+      }
+      waits1[j] = 500;
+      pthread_t thread0;
+      pthread_t thread1;
+
+      kvs0.set_waits(waits0);
+      kvs1.set_waits(waits1);
+      set_args0.kvba = &kvs0;
+      rm_args1.kvba = &kvs1;
+
+      bigmap[count] = make_pair(random_string(5),
+	  KvFlatBtreeAsync::to_bl(random_string(7)));
+      keys.insert(count++);
+      set_args0.key = bigmap[count].first;
+      set_args0.val = bigmap[count].second;
+      int rm_int = -1;
+      while(keys.count(rm_int) == 0) {
+	rm_int = rand() % count;
+      }
+      rm_args1.key = bigmap[rm_int];
+      keys.erase(rm_int);
+      bigmap.erase(rm_int);
+
+      err = pthread_create(&thread0, NULL,
+	  pset, (void*)&set_args0);
+      if (err < 0) {
+	cout << "error creating first pthread: " << err << std::endl;
+	return err;
+      }
+      err = pthread_create(&thread1, NULL, pset, (void*)&rm_args1);
+      if (err < 0) {
+	cout << "error creating second pthread: " << err << std::endl;
+	return err;
+      }
+      void *status0;
+      void *status1;
+      cout << "waiting to join writer of Key " << i << std::endl;
+      err = pthread_join(thread0, &status0);
+      if (err < 0) {
+	cout << "error joining first pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "waiting to join writer of Key " << 9 + j << std::endl;
+      err = pthread_join(thread1, &status1);
+      if (err < 0) {
+	cout << "error joining second pthread: " << err << std::endl;
+	return err;
+      }
+      cout << "checking consistency" << std::endl;
+      if (!kvs0.is_consistent()) {
+	return -134;
+      }
+    }
+  }
+  //cout << kvs0.str();
+  return err;
+}
 
 int KvStoreTest::functionality_tests() {
   int err = 0;
@@ -722,6 +877,11 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
     cout << "concurrent sets failed: " << err << std::endl;
     return err;
   }
+  err = test_concurrent_set_rms(argc, argv);
+  if (err < 0) {
+    cout << "concurrent set/rms failed: " << err << std::endl;
+    return err;
+  }
   return err;
 }
 
@@ -733,7 +893,7 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.verification_tests(argc, argv);
+  //err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();

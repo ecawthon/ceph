@@ -95,7 +95,7 @@ public:
     pool_name("data"),
     waits(wait),
     wait_index(0),
-    TIMEOUT(200,0)
+    TIMEOUT(2000000,0)
   {}
 
   static string to_string(string s, int i);
