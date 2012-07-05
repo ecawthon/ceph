@@ -30,7 +30,6 @@ protected:
   int k;
   string index_name;
   string rados_id;
-  string client_name;
   int client_index;
   char pair_init;
   char sub_separator;
@@ -62,8 +61,11 @@ protected:
   //Things that modify objects
   int split(const string &obj, const string &high_key, int * ver,
       map<string,bufferlist> * omap);
-  int rebalance(const string &o1, const string &hk1, int *ver);
+  int rebalance(const string &o1, const string &hk1, int *ver, bool reverse);
 public:
+  string client_name;
+
+
   KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
@@ -84,7 +86,7 @@ public:
   : k(k_val),
     index_name("index_object"),
     rados_id("admin"),
-    client_name(string(name).append(".")),
+    client_name(string(name).append("dot")),
     client_index(0),
     pair_init('('),
     sub_separator('|'),

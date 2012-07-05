@@ -62,25 +62,13 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
     rados.shutdown();
     return r;
   }
-  cout << "setup ok" << std::endl;
 
-  librados::ObjectIterator it;
-  for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
-    librados::ObjectWriteOperation rm;
-    rm.remove();
-    io_ctx.operate(it->first, &rm);
-  }
-
+/*
   librados::ObjectWriteOperation make_obj;
-  librados::AioCompletion * make_obj_aioc = rados.aio_create_completion();
-  map<string, bufferlist> to_set;
-  to_set["key"] = to_bl("value");
-  make_obj.omap_set(to_set);
-  io_ctx.aio_operate("object", make_obj_aioc, &make_obj);
-  make_obj_aioc->wait_for_safe();
-  cout << "return value: " << make_obj_aioc->get_return_value() << " version: "
-      << make_obj_aioc->get_version() << std::endl;
-  int err = make_obj_aioc->get_return_value();
+  make_obj.create(true);
+  make_obj.setxattr("unwritable", to_bl("0"));
+  int err = io_ctx.operate("object", &make_obj);
+  cout << "make object return value: " << err << std::endl;
   if (err < 0) {
     cout << "initial write failed with " << err << std::endl;
     return err;
@@ -89,21 +77,23 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   librados::ObjectReadOperation read_obj;
   librados::AioCompletion * read_obj_aioc = rados.aio_create_completion();
   map<string, bufferlist> get_omap;
-  //read_obj.omap_get_vals("", LONG_MAX, &get_omap, &err);
-  uint64_t *psize;
-  time_t *pmtime;
-  read_obj.stat(psize, pmtime, &err);
+  read_obj.omap_get_vals("", LONG_MAX, &get_omap, &err);
+  //uint64_t psize;
+  //time_t pmtime;
+  //read_obj.stat(&psize, &pmtime, &err);
   io_ctx.aio_operate("object", read_obj_aioc, &read_obj, NULL);
   read_obj_aioc->wait_for_safe();
   int obj_ver = read_obj_aioc->get_version();
-  cout << "read found version: " << read_obj_aioc->get_version()
+  cout << "First read/write finished. version: " << read_obj_aioc->get_version()
       << " and error: " << read_obj_aioc->get_return_value() << std::endl;
 
   librados::ObjectWriteOperation modify_obj;
   librados::AioCompletion * modify_obj_aioc = rados.aio_create_completion();
-  to_set["key1"] = to_bl("value1");
-  modify_obj.omap_set(to_set);
-  io_ctx.set_assert_version(obj_ver);
+  modify_obj.create(true);
+  //modify_obj.assert_version(obj_ver);
+  //map<string,bufferlist> to_insert;
+  //to_insert["Key 1"] = to_bl("Value 1");
+  //modify_obj.omap_set(to_insert);
   io_ctx.aio_operate("object", modify_obj_aioc, &modify_obj);
   modify_obj_aioc->wait_for_safe();
   err = modify_obj_aioc->get_return_value();
@@ -117,19 +107,22 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
 
   librados::ObjectWriteOperation write_again;
   librados::AioCompletion * write_again_obj_aioc = rados.aio_create_completion();
-  to_set["key2"] = to_bl("value2");
-  write_again.omap_set(to_set);
-  io_ctx.set_assert_version(obj_ver);
+  to_insert["key2"] = to_bl("value2");
+  //write_again.omap_set(to_insert);
+  //write_again.assert_version(obj_ver);
+  write_again.remove();
   io_ctx.aio_operate("object", write_again_obj_aioc, &write_again);
   write_again_obj_aioc->wait_for_safe();
   err = write_again_obj_aioc->get_return_value();
   if (err < 0) {
-    cout << "second write failed with " << err << std::endl;
-    return err;
+    cout << "third write failed with " << err << std::endl;
+//    return err;
   }
-  cout << "Third write finished. return value "
+  else {
+    cout << "Third write finished. return value "
       << write_again_obj_aioc->get_return_value() << " version: "
       << write_again_obj_aioc->get_version() << std::endl;
+  }
 
   librados::ObjectReadOperation read_obj_again;
   librados::AioCompletion * read_obj_again_aioc = rados.aio_create_completion();
@@ -138,12 +131,6 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   read_obj_again_aioc->wait_for_safe();
   cout << "read found version: " << read_obj_again_aioc->get_version()
       << " and error: " << read_obj_again_aioc->get_return_value() << std::endl;
-/*
-  librados::ObjectWriteOperation make_max_obj;
-  make_max_obj.create(true);
-  //make_max_obj.setxattr("size", to_bl("",0));
-  make_max_obj.setxattr("unwritable", to_bl("0"));
-  io_ctx.operate(client_name, &make_max_obj);
 
   librados::ObjectWriteOperation make_index;
   make_index.create(true);
@@ -155,6 +142,11 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
     cout << "Making the index failed with code " << r << std::endl;
     return r;
   }
+
+  librados::ObjectWriteOperation make_max_obj;
+  make_max_obj.create(true);
+  make_max_obj.setxattr("unwritable", to_bl("0"));
+  r = io_ctx.operate(client_name, &make_max_obj);
 */
   return r;
 
@@ -221,7 +213,7 @@ int KvFlatBtreeAsync::next(const string &obj_high_key, const string &obj,
   oro.omap_get_vals(obj_high_key,LONG_MAX,&kvs,&err);
   err = io_ctx.operate(index_name, &oro, NULL);
   if (err < 0){
-    cout << "getting kvs failed with error " <<err;
+    cout << "\t\t" << client_name << ": getting kvs failed with error " <<err;
     cout << std::endl;
     return err;
   }
@@ -299,7 +291,7 @@ int KvFlatBtreeAsync::oid(const string &key, bufferlist * raw_val,
       if(it->first >= key){
 	*max_key = it->first;
 	*raw_val = it->second;
-	current_op << "\toid is returning "
+	cout << "\t" << client_name << ": oid is returning "
 	    << string(raw_val->c_str(), raw_val->length()) << std::endl;
 	return err;
       }
@@ -308,7 +300,7 @@ int KvFlatBtreeAsync::oid(const string &key, bufferlist * raw_val,
   //if we haven't returned yet, it's because the key is higher than the highest
   //existing bucket.
   *max_key = "1";
-  *raw_val = to_bl("0" + client_name);
+  *raw_val = kvmap["1"];
   return err;
 }
 
@@ -414,6 +406,7 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
   current_op << "\tcleaning up after " << p.prefix << std::endl;
   cout << "\t" << client_name << ": cleaning up after " << p.prefix
       << std::endl;
+  assert(false);
   int err = 0;
   map<string,bufferlist> new_index;
   map<string, pair<bufferlist, int> > assertions;
@@ -482,31 +475,33 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
 
 int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
     int * ver, map<string, bufferlist> * all) {
-  current_op << "\tsplitting " << obj << std::endl;
+  cout << "\t\t" << client_name << "-split: splitting " << obj << std::endl;
   int err = 0;
   librados::ObjectReadOperation get_obj;
   map<string, bufferlist> lower;
   std::set<string> index_keyset;
 
   //read obj
-  current_op << "\t\treading " << obj << std::endl;
+  cout << "\t\t" << client_name << "-split: reading " << obj << std::endl;
   librados::AioCompletion * obj_aioc = rados.aio_create_completion();
   get_obj.omap_get_vals("", LONG_MAX, all, &err);
   get_obj.omap_get_vals("", k, &lower, &err);
   err = io_ctx.aio_operate(obj, obj_aioc, &get_obj, NULL);
+  obj_aioc->wait_for_safe();
+  err = obj_aioc->get_return_value();
   if (err < 0){
     //possibly -ENODATA, meaning someone else deleted it.
-    current_op << "\t\treading " << obj << " failed with " << err;
+    cout << "\t\treading " << obj << " failed with " << err;
     cout << std::endl;
     return err;
   }
-  obj_aioc->wait_for_safe();
   *ver = obj_aioc->get_version();
-  current_op << "\t\tfinished reading " << obj << " version " << *ver
+  current_op << "\t\t" << client_name << "-split: finished reading " << obj
+      << " version " << *ver
       << std::endl;
   int obj_size = all->size();
   cout << "\t\t" << client_name << "-split: size of " << obj << "is "
-      << obj_size << std::endl;
+      << obj_size << ", version is " << *ver << std::endl;
   if (obj_size < 2*k){
     current_op << "\t\tCan't split " << obj << " - not full" << std::endl;
     return -1;
@@ -517,7 +512,6 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   map<string, bufferlist>::reverse_iterator rit = lower.rbegin();
   string o1w = to_string(client_name, client_index++);
   string key1("0" + rit->first);
-  int size1 = lower.size();
   librados::ObjectWriteOperation write1;
   write1.create(true);
   write1.omap_set(lower);
@@ -526,9 +520,6 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
       << std::endl;
 
   //for upper half object
-  bufferlist size2 = to_bl("",
-      obj_size
-      - size1);
   map<string,bufferlist> high;
   high.insert(++all->find(rit->first), all->end());
   string o2w = to_string(client_name,client_index++);
@@ -567,7 +558,8 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   std::map<string, bufferlist> prefixed;
   prefixed[high_key] = index_bl;
   std::map<string, pair<bufferlist, int> > assertions;
-  assertions[high_key] = pair<bufferlist, int>(to_bl("0"+obj), CEPH_OSD_CMPXATTR_OP_EQ);
+  assertions[high_key] = pair<bufferlist, int>(to_bl("0"+obj),
+      CEPH_OSD_CMPXATTR_OP_EQ);
   librados::ObjectWriteOperation prefix_index;
   prefix_index.omap_cmp(assertions, &err);
   prefix_index.omap_set(prefixed);
@@ -635,7 +627,7 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
 
   //mark the object unwritable, asserting the version number
   librados::AioCompletion * aioc_obj = rados.aio_create_completion();
-  io_ctx.set_assert_version(*ver);
+  unwritable_old.assert_version(*ver);
   usleep(waits[wait_index++]);
   cout << "\t\t" << client_name << "-split: marking object " << obj << std::endl;
   err = io_ctx.aio_operate(obj, aioc_obj, &unwritable_old);
@@ -643,7 +635,7 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   err = aioc_obj->get_return_value();
   if (err < 0) {
     //most likely because it changed, in which case it will be -ECANCELED
-    current_op << "\t\t" << client_name << "-split: marking " << obj
+    cout << "\t\t" << client_name << "-split: marking " << obj
 	<< "failed with code" << err << std::endl;
     librados::AioCompletion * a1 = rados.aio_create_completion();
     librados::AioCompletion * a2 = rados.aio_create_completion();
@@ -659,6 +651,26 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
     cout << "\t\t" << client_name << "-split: deleted object " << o2w << std::endl;
     a2->wait_for_safe();
     cout << "\t\t" << client_name << "-split: deleted object " << o1w << std::endl;
+    librados::ObjectWriteOperation rollback_index;
+    librados::AioCompletion * index_aioc = rados.aio_create_completion();
+    assertions[high_key].first = index_bl;
+    rollback_index.omap_cmp(assertions, &err);
+    map<string, bufferlist> old_map;
+    old_map[high_key] = to_bl("0" + obj);
+    rollback_index.omap_set(old_map);
+    usleep(waits[wait_index++]);
+    cout << "\t\t" << client_name << "-split: updating index " << std::endl;
+    io_ctx.aio_operate(index_name, index_aioc, &rollback_index);
+    index_aioc->wait_for_safe();
+    err = index_aioc->get_return_value();
+    if (err < 0) {
+      //this shouldn't happen
+      cout << "rewriting the index failed with code " << err;
+      cout << ". someone else must have thought we died, so dying" << std::endl;
+      return err;
+    }
+    cout << "\t\t" << client_name << "-split: updated index. done splitting."
+	<< std::endl;
     return err;
   }
   cout << "\t\t" << client_name << "-split: marked object " << obj << std::endl;
@@ -696,23 +708,53 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
   return err;
 }
 
-int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
+int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver,
+    bool reverse){
   current_op << "\trebalancing " << o1 << std::endl;
   int err = 0;
   string o2;
   string hk2;
   usleep(waits[wait_index++]);
-  next(hk1, o1, &hk2, &o2);
-  cout << "\t\t" << client_name << "-rebalance: next is (" << hk2 << "," << o2 << ")" << std::endl;
+  err = next(hk1, o1, &hk2, &o2);
+  if (err < 0) {
+    return err;
+  }
+  cout << "\t\t" << client_name << "-rebalance: next is (" << hk2 << "," << o2
+      << ")" << std::endl;
   if (o1 == o2) {
     usleep(waits[wait_index++]);
     prev(hk1, o1, &hk2, &o2);
-    cout << "\t\t" << client_name << "-rebalance: prev is (" << hk2 << "," << o2 << ")" << std::endl;
+    cout << "\t\t" << client_name << "-rebalance: prev is (" << hk2 << ","
+	<< o2 << ")" << std::endl;
     if (o1 == o2) {
-      cout << "\t\t" << client_name << "-rebalance: this is the only node, so aborting" << std::endl;
+      librados::ObjectReadOperation read_o1;
+      librados::AioCompletion * read_o1_aioc = rados.aio_create_completion();
+      map<string,bufferlist> o1_map;
+      bufferlist unw1;
+      read_o1.omap_get_vals("", LONG_MAX, &o1_map, &err);
+      read_o1.getxattr("unwritable", &unw1, &err);
+      usleep(waits[wait_index++]);
+      io_ctx.aio_operate(o1, read_o1_aioc, &read_o1, NULL);
+      read_o1_aioc->wait_for_safe();
+      err = read_o1_aioc->get_return_value();
+      if (err < 0 || string(unw1.c_str(), unw1.length()) == "1") {
+	if (err == -ENODATA || err == 0) {
+	  cout << "\t\t" << client_name << "-rebalance: ENODATA on reading "
+	      << o1 << std::endl;
+	  return err;
+	}
+	else {
+	  cout << "rebalance found an unexpected error reading"
+	" " << o1 << "-rebalance: " << err << std::endl;
+	  return err;
+	}
+      }
+      *ver = read_o1_aioc->get_version();
+      cout << "\t\t" << client_name << "-rebalance: this is the only node, "
+	  << "so aborting" << std::endl;
       return -1;
     }
-    return rebalance(o2, hk2, ver);
+    return rebalance(o2, hk2, ver, true);
   }
   cout << "\t\t" << client_name << "-rebalance: o1 is " << o1 << " , o2 is "
       << o2 << std::endl;
@@ -730,7 +772,8 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
   err = read_o1_aioc->get_return_value();
   if (err < 0 || string(unw1.c_str(), unw1.length()) == "1") {
     if (err == -ENODATA || err == 0) {
-      cout << "\t\t" << client_name << "-rebalance: ENODATA on reading " << o1 << std::endl;
+      cout << "\t\t" << client_name << "-rebalance: ENODATA on reading "
+	  << o1 << std::endl;
       return err;
     }
     else {
@@ -741,7 +784,8 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
   }
   int vo1 = read_o1_aioc->get_version();
   int size1 = o1_map.size();
-  cout << "\t\t" << client_name << "-rebalance: read " << o1 << ". size: " << size1 << " version: " << vo1
+  cout << "\t\t" << client_name << "-rebalance: read " << o1 << ". size: "
+      << size1 << " version: " << vo1
       << std::endl;
 
   //read o2
@@ -765,8 +809,15 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
   }
   int vo2 = read_o2_aioc->get_version();
   int size2 = o2_map.size();
-  cout << "\t\t" << client_name << "-rebalance: read " << o2 << ". size: " << size2 << " version: " << vo1
+  cout << "\t\t" << client_name << "-rebalance: read " << o2 << ". size: "
+      << size2 << " version: " << vo2
       << std::endl;
+
+  if (reverse) {
+    *ver = vo2;
+  } else {
+    *ver = vo1;
+  }
 
   //calculations
   if (size1 >= k && size1 <= 2*k && size2 >= k && size2 <= 2*k) {
@@ -939,9 +990,9 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
     err = aioc1->get_return_value();
     if (err < 0) {
       //This is not an error that should happen, so not catching it for now.
-      assert(false);
       cout << "rebalancing failed - creating second object failed"
        << " with code " << err << std::endl;
+      assert(false);
       librados::ObjectWriteOperation clean2;
       clean2.remove();
       usleep(waits[wait_index++]);
@@ -967,12 +1018,12 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
   cout << "\t\t" << client_name << "-rebalance: created " << o2w << std::endl;
   
   //mark the objects unwritable, asserting the version number
-  io_ctx.set_assert_version(vo1);
+  flag1.assert_version(vo1);
   librados::AioCompletion * un_aioc1 = rados.aio_create_completion();
   usleep(waits[wait_index++]);
   cout << "\t\t" << client_name << "-rebalance: marking " << o1 << std::endl;
   err = io_ctx.aio_operate(o1, un_aioc1, &flag1);
-  io_ctx.set_assert_version(vo2);
+  flag2.assert_version(vo2);
   librados::AioCompletion * un_aioc2 = rados.aio_create_completion();
   usleep(waits[wait_index++]);
   cout << "\t\t" << client_name << "-rebalance: marking " << o2 << std::endl;
@@ -1018,6 +1069,30 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
     } else {
       cout << "\t\t" << client_name << "-rebalance: removed " << o1w << std::endl;
     }
+    librados::ObjectWriteOperation rollback_index;
+    librados::AioCompletion * index_aioc = rados.aio_create_completion();
+    if (rebalance){
+      assertions[hk1].first = prefixed_entries[hk1];
+    }
+    assertions[hk2].first = prefixed_entries[hk2];
+    rollback_index.omap_cmp(assertions, &err);
+    map<string, bufferlist> old_map;
+    old_map[hk1] = to_bl("0"+o1);
+    old_map[hk2] = to_bl("0"+o2);
+    rollback_index.omap_set(old_map);
+    usleep(waits[wait_index++]);
+    cout << "\t\t" << client_name << "-split: updating index " << std::endl;
+    io_ctx.aio_operate(index_name, index_aioc, &rollback_index);
+    index_aioc->wait_for_safe();
+    err = index_aioc->get_return_value();
+    if (err < 0) {
+      //this shouldn't happen
+      cout << "rewriting the index failed with code " << err;
+      cout << ". someone else must have thought we died, so dying" << std::endl;
+      return err;
+    }
+    cout << "\t\t" << client_name << "-split: updated index. done splitting."
+	<< std::endl;
     return err;
   }
   cout << "\t\t" << client_name << "-rebalance: marked " << o2 << std::endl;
@@ -1062,6 +1137,30 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1, int *ver){
     } else {
       cout << "\t\t" << client_name << "-rebalance: removed " << o1w << std::endl;
     }
+    librados::ObjectWriteOperation rollback_index;
+    librados::AioCompletion * index_aioc = rados.aio_create_completion();
+    if (rebalance){
+      assertions[hk1].first = prefixed_entries[hk1];
+    }
+    assertions[hk2].first = prefixed_entries[hk2];
+    rollback_index.omap_cmp(assertions, &err);
+    map<string, bufferlist> old_map;
+    old_map[hk1] = to_bl("0"+o1);
+    old_map[hk2] = to_bl("0"+o2);
+    rollback_index.omap_set(old_map);
+    usleep(waits[wait_index++]);
+    cout << "\t\t" << client_name << "-split: updating index " << std::endl;
+    io_ctx.aio_operate(index_name, index_aioc, &rollback_index);
+    index_aioc->wait_for_safe();
+    err = index_aioc->get_return_value();
+    if (err < 0) {
+      //this shouldn't happen
+      cout << "rewriting the index failed with code " << err;
+      cout << ". someone else must have thought we died, so dying" << std::endl;
+      return err;
+    }
+    cout << "\t\t" << client_name << "-split: updated index. done splitting."
+	<< std::endl;
     return err;
   }
   
@@ -1173,12 +1272,14 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
       return err;
     }
     obj = string(p.val.c_str(), p.val.length());
+
     cout << "\t" << client_name << ": obj is " << obj << std::endl;
     map<string, bufferlist> duplicates;
     usleep(waits[wait_index++]);
     cout << "\t" << client_name << ": running split on " << obj << std::endl;
     err = split(obj, hk, &obj_ver, &duplicates);
     if (err < 0) {
+      cout << "\t" << client_name << ": split returned " << err << std::endl;
       if (err == -ENODATA) {
 	if (mytime - p.ts <= TIMEOUT) {
 	  cout << "\t" << client_name << ": prefix and not timed out, "
@@ -1206,7 +1307,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   //write
   librados::ObjectWriteOperation owo;
   librados::AioCompletion * write_aioc = rados.aio_create_completion();
-  io_ctx.set_assert_version(obj_ver);
+  owo.assert_version(obj_ver);
   map<string, pair<bufferlist, int> > assertions;
   map<string,bufferlist> to_insert;
   to_insert[key] = val;
@@ -1214,7 +1315,8 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   owo.omap_set(to_insert);
   usleep(waits[wait_index++]);
   err = io_ctx.aio_operate(obj, write_aioc, &owo);
-  cout << "\t" << client_name << ": inserting " << key << " with value " << string(to_insert[key].c_str(),
+  cout << "\t" << client_name << ": inserting " << key << " with value "
+      << string(to_insert[key].c_str(),
       to_insert[key].length()) << " into object " << obj
       << " with version " << obj_ver << std::endl;
   if (err < 0) {
@@ -1225,11 +1327,20 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   err = write_aioc->get_return_value();
   cout << "\t" << client_name << ": write finished with " << err << std::endl;
   if (err < 0) {
-    cout << "\t" << client_name << ": writing obj failed - probably failed assert. " << err << std::endl;
+    if (err == -EOVERFLOW){
+      cout << str();
+      assert(false);
+    }
+    cout << "\t" << client_name << ": writing obj failed. "
+	<< "probably failed assert. " << err << std::endl;
     return set(key, val, update_on_existing);
   }
 
-  rebalance(obj, hk, &obj_ver);
+  err = rebalance(obj, hk, &obj_ver, false);
+  if (err == -ENOENT) {
+    return err;
+  }
+  err = 0;
   current_op << "\tfinished set" << std::endl;
   //cout << current_op.str() << std::endl;
   return err;
@@ -1237,7 +1348,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 
 int KvFlatBtreeAsync::remove(const string &key) {
   current_op.str("");
-  current_op << "removing " << key << std::endl;
+  cout << client_name << ": removing " << key << std::endl;
   int err = 0;
   bufferlist objb;
   string obj;
@@ -1258,21 +1369,27 @@ int KvFlatBtreeAsync::remove(const string &key) {
     prefix_data p;
     err = parse_prefix(&objb, &p);
     if (err < 0) {
-      current_op << "\tparsing prefix failed - bad prefix. " << err << std::endl;
+      current_op << "\tparsing prefix failed - bad prefix. " << err
+	  << std::endl;
       return err;
     }
     obj = string(p.val.c_str(), p.val.length());
-    current_op << "\tobj is " << obj << std::endl;
+    cout << "\t" << client_name << ": obj is " << obj << std::endl;
     usleep(waits[wait_index++]);
-    err = rebalance(obj, hk, &obj_ver);
+    cout << "\t" << client_name << ": rebalancing " << obj << std::endl;
+    err = rebalance(obj, hk, &obj_ver, false);
     if (err < 0) {
+      cout << "\t" << client_name << ": rebalance returned " << err
+	  << std::endl;
       if (err == -ENODATA) {
 	if (mytime - p.ts <= TIMEOUT) {
 	  return remove(key);
 	} else {
 	  //the client died after deleting the object. clean up.
-	  cout << current_op.str() << std::endl;
-	 cleanup(p, err);
+	  //cout << current_op.str() << std::endl;
+	  cout << "\t" << client_name << ": need to cleanup" << std::endl;
+	  assert(false);
+	  cleanup(p, err);
 	}
       }
       else if (err != -1 && err != -ECANCELED) {
@@ -1286,21 +1403,27 @@ int KvFlatBtreeAsync::remove(const string &key) {
   //write
   librados::ObjectWriteOperation owo;
   librados::AioCompletion * write_aioc = rados.aio_create_completion();
-  io_ctx.set_assert_version(obj_ver);
+  owo.assert_version(obj_ver);
   owo.cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("0"));
   std::set<string> to_rm;
   to_rm.insert(key);
   owo.omap_rm_keys(to_rm);
   usleep(waits[wait_index++]);
+  cout << "\t" << client_name << ": removing. asserting version " << obj_ver
+      << std::endl;
   err = io_ctx.aio_operate(obj, write_aioc, &owo);
   write_aioc->wait_for_safe();
   err = write_aioc->get_return_value();
   if (err < 0) {
-    cout << "remove: writing failed - probably failed assert. "
+    cout << client_name << "-remove: writing failed - probably failed assert. "
 	<< err << std::endl;
+    if (err == -75){
+      cout << str();
+      assert(false);
+    }
     return remove(key);
   }
-  rebalance(obj, hk, &obj_ver);
+  rebalance(obj, hk, &obj_ver, false);
   return err;
 }
 
@@ -1505,7 +1628,8 @@ bool KvFlatBtreeAsync::is_consistent() {
 	  cout << "Not consistent! A client has died and left a prefix."
 	      << std::endl;
 	  cout << it->first << "\t"
-	  	    << string(it->second.c_str(), it->second.length()) << std::endl;
+	  	    << string(it->second.c_str(), it->second.length())
+	  	    << std::endl;
 	  ret = false;
 	}
       } else{
@@ -1529,7 +1653,8 @@ bool KvFlatBtreeAsync::is_consistent() {
 
   //check objects
   string prev = "";
-  for (std::map<string, string>::iterator it = parsed_index.begin(); it != parsed_index.end();
+  for (std::map<string, string>::iterator it = parsed_index.begin();
+      it != parsed_index.end();
       ++it) {
     librados::ObjectReadOperation read;
     read.omap_get_keys("", LONG_MAX, &sub_objs[it->second], &err);
@@ -1580,8 +1705,11 @@ string KvFlatBtreeAsync::str() {
   std::set<string> keys;
   std::map<string,bufferlist> index;
   librados::ObjectReadOperation oro;
+  librados::AioCompletion * top_aioc = rados.aio_create_completion();
   oro.omap_get_vals("",LONG_MAX,&index,&err);
-  io_ctx.operate(index_name, &oro, NULL);
+  io_ctx.aio_operate(index_name, top_aioc, &oro, NULL);
+  top_aioc->wait_for_safe();
+  err = top_aioc->get_return_value();
   if (err < 0 && err != -5){
     cout << "getting keys failed with error " <<err;
     cout << std::endl;
@@ -1601,6 +1729,7 @@ string KvFlatBtreeAsync::str() {
   vector<string> all_names;
   vector<int> all_sizes(index.size());
   vector<int> all_versions(index.size());
+  vector<bufferlist> all_unwrit(index.size());
   vector<map<string,bufferlist> > all_maps(keys.size());
   vector<map<string,bufferlist>::iterator> its(keys.size());
   unsigned done = 0;
@@ -1635,6 +1764,7 @@ string KvFlatBtreeAsync::str() {
     librados::ObjectReadOperation oro;
     librados::AioCompletion *aioc = rados.aio_create_completion();
     oro.omap_get_vals("", LONG_MAX, &all_maps[indexer], &err);
+    oro.getxattr("unwritable", &all_unwrit[indexer], &err);
     io_ctx.aio_operate(*it, aioc, &oro, NULL);
     aioc->wait_for_safe();
     if (aioc->get_return_value() < 0) {
@@ -1677,6 +1807,16 @@ string KvFlatBtreeAsync::str() {
     ret << "version: " << all_versions[i];
     ret << string((19 - (string("version: ").length()
 	  + to_string("",all_versions[i]).length()))/2, ' ') << "|\t";
+  }
+  ret << std::endl;
+  for (int i = 0; i < indexer; i++) {
+    its[i] = all_maps[i].begin();
+    ret << "|" << string((19 - (string("unwritable? ").length()
+	+ 1))/2, ' ');
+    ret << "unwritable? " << string(all_unwrit[i].c_str(),
+	all_unwrit[i].length());
+    ret << string((19 - (string("unwritable? ").length()
+	  + 1))/2, ' ') << "|\t";
   }
   ret << std::endl;
   for (int i = 0; i < indexer; i++) {
