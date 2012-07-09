@@ -12,6 +12,7 @@
 
 #include <string>
 #include <climits>
+#include <cfloat>
 #include <iostream>
 
 using namespace std;
@@ -30,6 +31,33 @@ struct rm_args {
   string key;
 };
 
+struct kv_bench_data {
+  double avg_latency;
+  double min_latency;
+  double max_latency;
+  double total_latency;
+  int started_ops;
+  int completed_ops;
+  std::map<int,int> freq_map;
+  pair<int,int> mode;
+  kv_bench_data()
+  : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
+    total_latency(0.0),
+    started_ops(0), completed_ops(0)
+  {}
+};
+
+class StopWatch {
+protected:
+  utime_t begin_time;
+  utime_t end_time;
+public:
+  void start_time();
+  void stop_time();
+  double get_time();
+  void clear();
+};
+
 class KvStoreTest {
 protected:
   int k;
@@ -39,12 +67,17 @@ protected:
 
   int entries;
   int ops;
+  const static int clients = 2;
+  double increment;
+  kv_bench_data data;
+  static StopWatch sw[clients];
 
 public:
   KvStoreTest()
   : k(2),
-    entries(100),
-    ops(100)//,
+    entries(30),
+    ops(10),
+    increment(0.01)
  //   test(stress_tests)
   {}
 
@@ -79,7 +112,10 @@ public:
 
   int test_concurrent_set_rms(int argc, const char** argv);
 
-  int test_concurrent_random_set_rms(int argc, const char** argv);
+  int test_verify_random_set_rms(int argc, const char** argv);
+
+
+  int test_stress_random_set_rms(int argc, const char** argv);
 
   /**
    * Test correctness of all methods in KeyValueStructure
@@ -89,4 +125,6 @@ public:
   int stress_tests();
 
   int verification_tests(int argc, const char** argv);
+
+  void print_time_data();
 };

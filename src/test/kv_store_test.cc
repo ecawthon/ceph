@@ -20,6 +20,20 @@
 #include <sstream>
 #include <cmath>
 
+void StopWatch::start_time() {
+  begin_time = ceph_clock_now(g_ceph_context);
+}
+void StopWatch::stop_time() {
+  end_time = ceph_clock_now(g_ceph_context);
+}
+double StopWatch::get_time() {
+  return (end_time - begin_time);
+}
+
+void StopWatch::clear() {
+  begin_time = end_time = utime_t();
+}
+
 int KvStoreTest::setup(int argc, const char** argv) {
   vector<const char*> args;
   argv_to_vec(argc,argv,args);
@@ -110,13 +124,13 @@ int KvStoreTest::setup(int argc, const char** argv) {
   //KvFlatBtree * kvb = new KvFlatBtree(k,io_ctx);
   //kvs = kvb;
   vector<__useconds_t> wait(100000,0);
-  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin", wait);
+  /*KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin", wait);
   int err = kvba->setup(argc, argv);
   if (err < 0) {
     cout << "error during setup: " << err << std::endl;
     return err;
   }
-  kvs = kvba;
+  kvs = kvba;*/
   librados::ObjectWriteOperation make_max_obj;
   make_max_obj.create(true);
   make_max_obj.setxattr("unwritable", KvFlatBtreeAsync::to_bl("0"));
@@ -132,7 +146,6 @@ int KvStoreTest::setup(int argc, const char** argv) {
     cout << "Making the index failed with code " << r << std::endl;
     return r;
   }
-
 
   return 0;
 }
@@ -645,15 +658,19 @@ int KvStoreTest::test_random_ops() {
 
 void *KvStoreTest::pset(void *ptr){
   struct set_args *args = (struct set_args *)ptr;
-  cout << args->kvba->client_name << " is starting " << std::endl;
+  int id = atoi(args->kvba->
+      get_name().substr(string("client").size(),
+	  ceil(log10(clients))).c_str());
+  sw[id].start_time();
   int err = args->kvba->set((string)args->key, (bufferlist)args->val, true);
+  sw[id].stop_time();
   return (void *) err;
 }
 
 void *KvStoreTest::prm(void *ptr) {
   cout << "prm started" << std::endl;
   struct rm_args *args = (struct rm_args *)ptr;
-  cout << "prm args found" << std::endl;
+  cout << "prm args found: key is " << ((string)args->key) << std::endl;
   args->kvba->remove((string)args->key);
   return NULL;
 }
@@ -799,12 +816,12 @@ int KvStoreTest::test_concurrent_set_rms(int argc, const char** argv){
   return err;
 }
 
-int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
+int KvStoreTest::test_verify_random_set_rms(int argc, const char** argv) {
   int err = 0;
   int wait_size_0 = 35;
   int wait_size_1 = 21;
-  vector<__useconds_t> waits0(wait_size_0,(__useconds_t)10);
-  vector<__useconds_t> waits1(wait_size_1,(__useconds_t)10);
+  vector<__useconds_t> waits0(10000000,(__useconds_t)10);
+  vector<__useconds_t> waits1(10000000,(__useconds_t)10);
   struct set_args set_args0;
   struct rm_args rm_args1;
   KvFlatBtreeAsync kvs0(2,"rados0", waits0);
@@ -819,8 +836,8 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
   KvFlatBtreeAsync * kvbas[10];
   struct set_args these_args[10];
 
-  for(int i = 0; i < 3; i++) {
-    vector<__useconds_t> wait(wait_size_0,(__useconds_t)0);
+  for(int i = 0; i < 10; i++) {
+    vector<__useconds_t> wait(wait_size_0 * 1000,(__useconds_t)0);
     string name = KvFlatBtreeAsync::to_string("prados",i);
     cout << "name is " << name << std::endl;
     kvbas[i] = new KvFlatBtreeAsync(2, name, wait);
@@ -829,7 +846,7 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
 
   srand(time(NULL));
 
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 10; i++) {
     cout << i << std::endl;
     pair<string, bufferlist> this_pair;
     this_pair.first = random_string(5);
@@ -842,7 +859,6 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
     these_args[i].key = bigmap[count].first;
     these_args[i].val = bigmap[count].second;
     cout << i << " set to insert " << bigmap[count].first << std::endl;
-    cout << kvbas[i]->client_name << " is about to start" << std::endl;
     err = pthread_create(&thread[i], NULL, pset, (void*)&these_args[i]);
     if (err < 0) {
 	cout << "error creating first pthread: " << err << std::endl;
@@ -852,7 +868,7 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
   }
   //return err;
 
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 10; i++) {
     void *status;
     int err = pthread_join(thread[i], &status);
     if (err < 0) {
@@ -869,12 +885,14 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
     if (i > 0) {
       waits0[i-1] = 0;
     }
-    waits0[i] = 500;
+    waits0[i] = 500000;
     for (int j = 0; j < wait_size_1; j++) {
       if (i > 0) {
         waits1[j-1] = 0;
       }
-      waits1[j] = 500;
+      cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t" << j + i*wait_size_1 << " / "
+	  << wait_size_0 * wait_size_1 << std::endl;
+      waits1[j] = 500000;
       pthread_t thread0;
       pthread_t thread1;
 
@@ -937,6 +955,171 @@ int KvStoreTest::test_concurrent_random_set_rms(int argc, const char** argv) {
   return err;
 }
 
+int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
+  int err = 0;
+  pthread_t real_threads[clients];
+  int set_size = ((int)ceil(clients / 2.0));
+  set_args set_args_ar[set_size];
+  int rm_size = ((int)floor(clients / 2.0));
+  rm_args rm_args_ar[rm_size];
+  KvFlatBtreeAsync * kvs[clients];
+  void *status[clients];
+  StopWatch sw[clients];
+  map<int, pair<string, bufferlist> > bigmap;
+
+
+  //setup initial objects
+  int count = 0;
+  pthread_t thread[entries];
+  KvFlatBtreeAsync * kvbas[entries];
+  struct set_args these_args[entries];
+
+  for(int i = 0; i < 10; i++) {
+    string name = KvFlatBtreeAsync::to_string("prados",i);
+    cout << "name is " << name << std::endl;
+    kvbas[i] = new KvFlatBtreeAsync(2, name);
+    kvbas[i]->setup(argc, argv);
+  }
+
+  srand(time(NULL));
+
+  for (int i = 0; i < 10; i++) {
+    cout << i << std::endl;
+    pair<string, bufferlist> this_pair;
+    this_pair.first = random_string(5);
+    this_pair.second = KvFlatBtreeAsync::to_bl(random_string(7));
+    cout << this_pair.first << std::endl;
+    bigmap[count] = this_pair;
+    cout << bigmap[count].first << std::endl;
+    //keys.insert(count);
+    these_args[i].kvba = kvbas[i];
+    these_args[i].key = bigmap[count].first;
+    these_args[i].val = bigmap[count].second;
+    cout << i << " set to insert " << bigmap[count].first << std::endl;
+    err = pthread_create(&thread[i], NULL, pset, (void*)&these_args[i]);
+    if (err < 0) {
+	cout << "error creating first pthread: " << err << std::endl;
+	return err;
+    }
+    count++;
+  }
+  //return err;
+
+  for (int i = 0; i < 10; i++) {
+    void *status;
+    int err = pthread_join(thread[i], &status);
+    if (err < 0) {
+	cout << "error joining first pthread: " << err << std::endl;
+	return err;
+    }
+    if (i == 2) cout << kvbas[i]->str();
+    delete kvbas[i];
+  }
+
+  //setup kvs
+  for(int i = 0; i < clients; i++) {
+    kvs[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i));
+    err = kvs[i]->setup(argc, argv);
+    if (err < 0) {
+      cout << "error setting up client " << i << ": " << err << std::endl;
+      return err;
+    }
+  }
+
+  //tests
+  for (int i = 0; i < ops; i++) {
+    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i << " / "
+	<< ops << std::endl;
+    int set_index = 0;
+    int rm_index = 0;
+
+    for (int j = 0; j < clients; j++) {
+      if (j % 2 == 0) {
+	set_args_ar[set_index].kvba = kvs[j];
+	bigmap[count] = pair<string, bufferlist>(random_string(5),
+	    KvFlatBtreeAsync::to_bl(random_string(7)));
+	//keys.insert(count);
+	set_args_ar[set_index].key = bigmap[count].first;
+	set_args_ar[set_index].val = bigmap[count].second;
+	cout << "kvs0 set to insert " << bigmap[count].first << std::endl;
+	err = pthread_create(&real_threads[j], NULL,
+	    pset, (void*)&set_args_ar[set_index]);
+	if (err < 0) {
+	  cout << "error creating first pthread: " << err << std::endl;
+	  return err;
+	}
+	cout << "created " << j << std::endl;
+	set_index++;
+	count++;
+      } else {
+	rm_args_ar[rm_index].kvba = kvs[j];
+	int rm_int = -1;
+	while(bigmap.count(rm_int) == 0) {
+	  rm_int = rand() % count;
+	}
+	assert(bigmap.count(rm_int) > 0);
+	cout << j << ": setting rm_args_ar[" << rm_index << "]  to " << bigmap[rm_int].first << std::endl;
+	rm_args_ar[rm_index].key = bigmap[rm_int].first;
+	cout << "kvs" << j << " is set to remove " << rm_args_ar[rm_index].key
+	    << std::endl;
+	//keys.erase(rm_int);
+	bigmap.erase(rm_int);
+	err = pthread_create(&real_threads[j], NULL, prm,
+	    (void*)&rm_args_ar[rm_index]);
+	cout << "created " << j << std::endl;
+	if (err < 0) {
+	  cout << "error creating remover pthread: " << err << std::endl;
+	  return err;
+	}
+	rm_index++;
+      }
+    }
+
+    for (int j = 0; j < clients; j++) {
+      cout << "waiting to join " << j << std::endl;
+      err = pthread_join(real_threads[j], &status[j]);
+      if (err < 0) {
+	cout << "error joining " << j << ": " << err << std::endl;
+	return err;
+      }
+      cout << "joined " << j << std::endl;
+      if (j == clients - 1) {
+	cout << "checking consistency" << std::endl;
+	if (!kvs[j]->is_consistent()) {
+	  return -134;
+	}
+      }
+      double time = sw[j].get_time();
+      sw[j].clear();
+      data.avg_latency = (data.avg_latency * data.completed_ops + time)
+          / (data.completed_ops + 1);
+      data.completed_ops++;
+      if (time < data.min_latency) {
+        data.min_latency = time;
+      }
+      if (time > data.max_latency) {
+        data.max_latency = time;
+      }
+      data.total_latency += time;
+      ++(data.freq_map[log10(time) / increment]);
+      if(data.freq_map[log10(time) / increment] > data.mode.second) {
+        data.mode.first = log10(time) / increment;
+        data.mode.second = data.freq_map[log10(time) / increment];
+      }
+    }
+  }
+  for (int j = 0; j < clients; j++) {
+    if (j == clients - 1) {
+      cout << kvs[j]->str();
+    }
+    delete kvs[j];
+  }
+
+  print_time_data();
+  return err;
+}
+
+
 int KvStoreTest::functionality_tests() {
   int err = 0;
   //kvs->remove_all();
@@ -985,7 +1168,7 @@ int KvStoreTest::stress_tests() {
 
 int KvStoreTest::verification_tests(int argc, const char** argv) {
   int err = 0;
-  err = test_concurrent_sets(argc, argv);
+  //err = test_concurrent_sets(argc, argv);
   if (err < 0) {
     cout << "concurrent sets failed: " << err << std::endl;
     return err;
@@ -995,12 +1178,54 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
     cout << "concurrent set/rms failed: " << err << std::endl;
     return err;
   }
-  //err = test_concurrent_random_set_rms(argc, argv);
+  //err = test_verify_random_set_rms(argc, argv);
   if (err < 0) {
     cout << "concurrent random set/rms failed: " << err << std::endl;
     return err;
   }
+  err = test_stress_random_set_rms(argc, argv);
+  if (err < 0) {
+    cout << "concurrent random stress test failed: " << err << std::endl;
+    return err;
+  }
   return err;
+}
+
+void KvStoreTest::print_time_data() {
+  cout << "========================================================";
+  cout << "\nNumber of initial entries:\t" << entries;
+  cout << "\nNumber of sets of operations:\t" << ops;
+  cout << "\nNumber of threads per op:\t" << clients;
+  cout << "\nk:\t\t\t\t" << k;
+  cout << std::endl;
+  cout << std::endl;
+  cout << "Average latency:\t" << data.avg_latency;
+  cout << "s\nMinimum latency:\t" << data.min_latency;
+  cout << "s\nMaximum latency:\t" << data.max_latency;
+  cout << "s\nMode latency:\t\t"<<"between "<<pow(10.0, data.mode.first * increment);
+  cout << " and " <<pow(10.0, data.mode.first * increment) + pow(10.0, increment);
+  cout << "s\nTotal latency:\t\t" << data.total_latency;
+  cout << "s"<<std::endl;
+  cout << std::endl;
+  //return;
+  cout << "Histogram: (left values are log10(time))" << std::endl;
+  for(int i = floor(log10(data.min_latency) / increment); i <
+      ceil(log10(data.max_latency) / increment); i++) {
+    cout << ">= "<< i * increment; //pow(10.0, i * increment);
+    int spaces;
+    if (i == 0) spaces = 4;
+    else spaces = 3 - floor(log10(i));
+    for (int j = 0; j < spaces; j++) {
+      cout << " ";
+    }
+    cout << "[";
+    for(int j = 0; j < ((data.freq_map)[i])*45/(data.mode.second); j++) {
+      cout << "*";
+    }
+    cout << std::endl;
+  }
+  cout << "\n========================================================"
+       << std::endl;
 }
 
 int main(int argc, const char** argv) {
@@ -1011,9 +1236,9 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  //err = kvst.verification_tests(argc, argv);
+  err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
-  kvst.stress_tests();
+  //kvst.stress_tests();
   return 0;
 };

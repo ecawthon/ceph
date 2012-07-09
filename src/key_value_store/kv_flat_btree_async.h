@@ -30,6 +30,7 @@ protected:
   int k;
   string index_name;
   string rados_id;
+  string client_name;
   int client_index;
   char pair_init;
   char sub_separator;
@@ -63,9 +64,6 @@ protected:
       map<string,bufferlist> * omap);
   int rebalance(const string &o1, const string &hk1, int *ver, bool reverse);
 public:
-  string client_name;
-
-
   KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
@@ -75,29 +73,29 @@ public:
     pair_init('('),
     sub_separator('|'),
     pair_end(')'),
-//    separator(','),
     sub_terminator(';'),
     terminator(':'),
     pool_name("data"),
-    TIMEOUT(2000000,0)
+    waits(),
+    wait_index(1),
+    TIMEOUT(2000000000,0)
   {}
 
   KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait)
   : k(k_val),
     index_name("index_object"),
     rados_id("admin"),
-    client_name(string(name).append("dot")),
+    client_name(string(name).append(".")),
     client_index(0),
     pair_init('('),
     sub_separator('|'),
     pair_end(')'),
-//    separator(','),
     sub_terminator(';'),
     terminator(':'),
     pool_name("data"),
     waits(wait),
     wait_index(0),
-    TIMEOUT(2000000,0)
+    TIMEOUT(50000000000000,0)
   {}
 
   static string to_string(string s, int i);
@@ -122,6 +120,9 @@ public:
   static int bl_to_int(bufferlist *bl);
 
 //  ~KvFlatBtreeAsync();
+
+  string get_name();
+
   int setup(int argc, const char** argv);
 
   void set_waits(const vector<__useconds_t> &wait);
