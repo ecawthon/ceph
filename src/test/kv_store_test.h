@@ -18,17 +18,28 @@
 using namespace std;
 using ceph::bufferlist;
 
-//typedef int (KvStoreTest::*kvs_test_t)();
+class StopWatch {
+protected:
+  utime_t begin_time;
+  utime_t end_time;
+public:
+  void start_time();
+  void stop_time();
+  double get_time();
+  void clear();
+};
 
 struct set_args {
-  KvFlatBtreeAsync * kvba;
+  KeyValueStructure * kvs;
   string key;
   bufferlist val;
+  StopWatch sw;
 };
 
 struct rm_args {
-  KvFlatBtreeAsync * kvba;
+  KeyValueStructure * kvs;
   string key;
+  StopWatch sw;
 };
 
 struct kv_bench_data {
@@ -47,41 +58,22 @@ struct kv_bench_data {
   {}
 };
 
-class StopWatch {
-protected:
-  utime_t begin_time;
-  utime_t end_time;
-public:
-  void start_time();
-  void stop_time();
-  double get_time();
-  void clear();
-};
-
 class KvStoreTest {
 protected:
   int k;
   string rados_id;
-  KeyValueStructure * kvs;
-  //kvs_test_t test;
 
   int entries;
   int ops;
-  const static int clients = 2;
+  int clients;
   double increment;
   kv_bench_data data;
-  static StopWatch sw[clients];
+  KeyValueStructure * kvs;
 
 public:
-  KvStoreTest()
-  : k(2),
-    entries(30),
-    ops(10),
-    increment(0.01)
- //   test(stress_tests)
-  {}
+  KvStoreTest();
 
-  //~KvStoreTest();
+  ~KvStoreTest();
 
   int setup(int argc, const char** argv);
 
@@ -108,9 +100,9 @@ public:
 
   static void *prm(void *ptr);
 
-  int test_concurrent_sets(int argc, const char** argv);
+  int test_verify_concurrent_sets(int argc, const char** argv);
 
-  int test_concurrent_set_rms(int argc, const char** argv);
+  int test_verify_concurrent_set_rms(int argc, const char** argv);
 
   int test_verify_random_set_rms(int argc, const char** argv);
 

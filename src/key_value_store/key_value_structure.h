@@ -9,6 +9,8 @@
 #define KEY_VALUE_STRUCTURE_HPP_
 
 #include "include/rados/librados.hpp"
+#include "include/utime.h"
+#include <vector>
 
 using std::string;
 using std::map;
@@ -21,6 +23,10 @@ public:
   virtual ~KeyValueStructure() {};
 
   ////////////////UPDATERS///////////////////
+
+  virtual int setup(int argc, const char** argv) = 0;
+
+  virtual void set_waits(const vector<__useconds_t> &wait) = 0;
 
   /**
    * if update_on_existing is false, returns an error if
@@ -70,8 +76,8 @@ public:
    * @param max_keys the number of keys to return, unless max_key is hit first.
    * pass -1 to max_keys to get all keys in range
    */
-  virtual int get_keys_in_range(const string &min_key, const string &max_key,
-      std::set<string> *key_set, int max_keys) = 0;
+  //virtual int get_keys_in_range(const string &min_key, const string &max_key,
+  //    std::set<string> *key_set, int max_keys) = 0;
 
   /**
    * stores keys and values starting at min_key and ending after max_key
@@ -84,8 +90,8 @@ public:
    * @param max_keys the number of keys to return, unless max_key is hit first.
    * pass -1 to max_keys to get all keys in range
    */
-  virtual int get_key_vals_in_range(string min_key,
-      string max_key, map<string,bufferlist> *kv_map, int max_keys) = 0;
+  //virtual int get_key_vals_in_range(string min_key,
+  //    string max_key, map<string,bufferlist> *kv_map, int max_keys) = 0;
 
   /**
    * True if the structure meets its own requirements for consistency.
