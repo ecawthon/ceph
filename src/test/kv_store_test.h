@@ -5,6 +5,8 @@
  *      Author: eleanor
  */
 
+#define EINCONSIST 135
+
 #include "key_value_store/key_value_structure.h"
 #include "key_value_store/kv_flat_btree_async.h"
 #include "include/rados/librados.hpp"

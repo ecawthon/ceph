@@ -168,7 +168,7 @@ int KvStoreTest::test_set_get_rm_one_kv() {
     return err;
   }
   if (!kvs->is_consistent()) {
-    return -134;
+    return -EINCONSIST;
   }
   cout << "[v] first set successful " << std::endl;
 
@@ -179,7 +179,7 @@ int KvStoreTest::test_set_get_rm_one_kv() {
     return err;
   }
   if (!kvs->is_consistent()) {
-    return -134;
+    return -EINCONSIST;
   }
   cout << "[v] second set successful " << std::endl;
 
@@ -205,7 +205,7 @@ int KvStoreTest::test_set_get_rm_one_kv() {
   }
   else {
     cout << "[x] gets did not return the same value" << std::endl;
-    return -134;
+    return -EINCONSIST;
   }
 
   bufferlist val3;
@@ -222,7 +222,7 @@ int KvStoreTest::test_set_get_rm_one_kv() {
     return err;
   }
   if (!kvs->is_consistent()) {
-    return -134;
+    return -EINCONSIST;
   }
   err = kvs->get("Key 1", &ret3);
   if (err < 0){
@@ -237,17 +237,17 @@ int KvStoreTest::test_set_get_rm_one_kv() {
 	<< "expected get(\"Key 1\") to return Value 3 but found "
 	<< string(ret3.c_str(), ret3.length()) << std::endl;
     cout << kvs->str() << std::endl;
-    return -134;
+    return -EINCONSIST;
   }
 
   kvs->remove("Key 1");
   if (!kvs->is_consistent()) {
-    return -134;
+    return -EINCONSIST;
   }
   cout << "[v] passed first removal" << std::endl;
   kvs->remove("Key 2");
   if (!kvs->is_consistent()) {
-    return -134;
+    return -EINCONSIST;
   }
   cout << "[v] passed removing test" << std::endl;
   return 0;
@@ -257,7 +257,7 @@ int KvStoreTest::test_split_merge() {
   int err = 0;
   kvs->remove_all();
   if (!kvs->is_consistent()) {
-    err = -134;
+    err = -EINCONSIST;
     return err;
   }
   map<string, bufferlist> data;
@@ -271,7 +271,7 @@ int KvStoreTest::test_split_merge() {
     data[key.str()] = val;
     kvs->set(key.str(), val, true);
     if (!kvs->is_consistent()) {
-      err = -134;
+      err = -EINCONSIST;
       return err;
     }
   }
@@ -292,7 +292,7 @@ int KvStoreTest::test_split_merge() {
   }
   if (!kvs->is_consistent()) {
     cout << "[x] Split failed - not consistent" << std::endl;
-    err = -134;
+    err = -EINCONSIST;
     return err;
   }
   cout << "[v] Passed split test" << std::endl;
@@ -307,7 +307,7 @@ int KvStoreTest::test_split_merge() {
     data[key.str()] = val;
     kvs->set(key.str(), val, true);
     if (!kvs->is_consistent()) {
-      err = -134;
+      err = -EINCONSIST;
       return err;
     }
   }
@@ -322,7 +322,7 @@ int KvStoreTest::test_split_merge() {
     return err;
   }
   if (!kvs->is_consistent()) {
-    err = -134;
+    err = -EINCONSIST;
     cout << "[x] Rebalance failed - not consistent" << std::endl;
     return err;
   }
@@ -339,7 +339,7 @@ int KvStoreTest::test_split_merge() {
       return err;
     }
     if (!kvs->is_consistent()) {
-      err = -134;
+      err = -EINCONSIST;
       cout << "[x] Merge failed with error" << err << std::endl;
       return err;
     }
@@ -384,7 +384,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     if (!kvs->is_consistent()) {
       cout << "set failed - not consistent" << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
   }
   cout << "insertions complete." << std::endl;
@@ -406,14 +406,14 @@ int KvStoreTest::test_non_random_insert_gets() {
     if (kvmap.count(*it) == 0) {
       cout << "there is an object that doesn't belong: " << *it << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
     keysleft--;
   }
   if (keysleft > 0) {
     cout << keysleft << " objects were not inserted." << std::endl;
     passed = false;
-    err = -134;
+    err = -EINCONSIST;
   }
   cout << "getting keys succeeded." << std::endl << "Checking values";
 
@@ -424,7 +424,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     cout << "get_all_keys_and_values failed - not consistent."
 	<< " this is surprising since that method only reads..." << std::endl;
     passed = false;
-    err = -134;
+    err = -EINCONSIST;
   }
   for (std::map<string,bufferlist>::iterator it = out_kvmap.begin();
       it != out_kvmap.end(); ++it) {
@@ -434,7 +434,7 @@ int KvStoreTest::test_non_random_insert_gets() {
       cout << "get_all_keys_and_values failed - there is an object that"
 	  << "doesn't belong: " << it->first << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
     else if (string(kvmap[it->first].c_str(), kvmap[it->first].length())
 	!= string(it->second.c_str(), it->second.length())) {
@@ -444,7 +444,7 @@ int KvStoreTest::test_non_random_insert_gets() {
 	  << " but found " << string(it->second.c_str(), it->second.length())
 	  << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
   }
   cout << "checking values successful. Removing..." << std::endl;
@@ -453,7 +453,7 @@ int KvStoreTest::test_non_random_insert_gets() {
   if (!kvs->is_consistent()) {
     cout << "remove all failed - not consistent" << std::endl;
     passed = false;
-    return -134;
+    return -EINCONSIST;
   }
 
   if (passed) {
@@ -482,7 +482,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     if (!kvs->is_consistent()) {
       cout << "set failed - not consistent" << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
   }
   cout << "insertions complete." << std::endl << "Getting keys";
@@ -503,14 +503,14 @@ int KvStoreTest::test_non_random_insert_gets() {
     if (kvmap.count(*it) == 0) {
       cout << "there is an object that doesn't belong: " << *it << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
     keysleft--;
   }
   if (keysleft > 0) {
     cout << keysleft << " objects were not inserted." << std::endl;
     passed = false;
-    err = -134;
+    err = -EINCONSIST;
   }
   cout << "getting keys succeeded." << std::endl << "Checking values";
 
@@ -521,7 +521,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     cout << "get_all_keys_and_values failed - not consistent."
 	<< " this is surprising since that method only reads..." << std::endl;
     passed = false;
-    err = -134;
+    err = -EINCONSIST;
   }
   for (std::map<string,bufferlist>::iterator it = out_kvmap.begin();
       it != out_kvmap.end(); ++it) {
@@ -531,7 +531,7 @@ int KvStoreTest::test_non_random_insert_gets() {
       cout << "get_all_keys_and_values failed - there is an object that"
 	  << "doesn't belong: " << it->first << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
     else if (string(kvmap[it->first].c_str(), kvmap[it->first].length())
 	!= string(it->second.c_str(), it->second.length())) {
@@ -541,7 +541,7 @@ int KvStoreTest::test_non_random_insert_gets() {
 	  << " but found " << string(it->second.c_str(), it->second.length())
 	  << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
   }
   cout << std::endl << "getting values complete. Removing them...";
@@ -560,7 +560,7 @@ int KvStoreTest::test_non_random_insert_gets() {
     if (!kvs->is_consistent()) {
       cout << "remove failed - not consistent" << std::endl;
       passed = false;
-      err = -134;
+      err = -EINCONSIST;
     }
   }
   cout << std::endl;
@@ -591,7 +591,7 @@ int KvStoreTest::test_random_insertions() {
     }
     if (!kvs->is_consistent()) {
       cout << "Random insertions failed - not consistent" << std::endl;
-      return -134;
+      return -EINCONSIST;
     }
   }
   cout << "random insertions successful" << std::endl;
@@ -616,11 +616,11 @@ int KvStoreTest::test_random_ops() {
       map_vector.push_back(pair<string,bufferlist>(key, bfr));
       elements[key] = bfr;
       if (!kvs->is_consistent()) {
-        return -134;
+        return -EINCONSIST;
       }
       kvs->set(key,bfr, true);
       if (!kvs->is_consistent()) {
-        return -134;
+        return -EINCONSIST;
       }
     }
     if (elements.size() > 0 && ((int)(elements.size()) >=
@@ -632,11 +632,11 @@ int KvStoreTest::test_random_ops() {
       }
       elements.erase(map_key);
       if (!kvs->is_consistent()) {
-        return -134;
+        return -EINCONSIST;
       }
       kvs->remove(map_key);
       if (!kvs->is_consistent()) {
-        return -134;
+        return -EINCONSIST;
       }
     }
   }
@@ -670,8 +670,8 @@ int KvStoreTest::test_verify_concurrent_sets(int argc, const char** argv) {
   vector<__useconds_t> waits1(wait_size_1,(__useconds_t)0);
   struct set_args set_args0;
   struct set_args set_args1;
-  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(2,"rados0", waits0);
-  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(2,"rados1", waits1);
+  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(k,"client0", waits0);
+  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(k,"client1", waits1);
   kvs0->setup(argc, argv);
   kvs1->setup(argc, argv);
 
@@ -729,7 +729,7 @@ int KvStoreTest::test_verify_concurrent_sets(int argc, const char** argv) {
       }
       cout << "checking consistency" << std::endl;
       if (!kvs->is_consistent()) {
-	return -134;
+	return -EINCONSIST;
       }
     }
   }
@@ -747,8 +747,8 @@ int KvStoreTest::test_verify_concurrent_set_rms(int argc, const char** argv){
   vector<__useconds_t> waits1(wait_size_1,(__useconds_t)0);
   struct set_args set_args0;
   struct rm_args set_args1;
-  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(2,"rados0", waits0);
-  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(2,"rados1", waits1);
+  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(k,"client0", waits0);
+  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(k,"client1", waits1);
   kvs0->setup(argc, argv);
   kvs1->setup(argc, argv);
 
@@ -803,7 +803,7 @@ int KvStoreTest::test_verify_concurrent_set_rms(int argc, const char** argv){
       }
       cout << "checking consistency" << std::endl;
       if (!kvs->is_consistent()) {
-	return -134;
+	return -EINCONSIST;
       }
     }
   }
@@ -821,8 +821,8 @@ int KvStoreTest::test_verify_random_set_rms(int argc, const char** argv) {
   vector<__useconds_t> waits1(wait_size_1,(__useconds_t)0);
   struct set_args set_args0;
   struct rm_args rm_args1;
-  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(2,"rados0", waits0);
-  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(2,"rados1", waits1);
+  KeyValueStructure * kvs0 = new KvFlatBtreeAsync(k,"client0", waits0);
+  KeyValueStructure * kvs1 = new KvFlatBtreeAsync(k,"client1", waits1);
   kvs0->setup(argc, argv);
   kvs1->setup(argc, argv);
   std::set<int> keys;
@@ -943,7 +943,7 @@ int KvStoreTest::test_verify_random_set_rms(int argc, const char** argv) {
       }
       cout << "checking consistency" << std::endl;
       if (!kvs->is_consistent()) {
-	return -134;
+	return -EINCONSIST;
       }
       count++;
     }
@@ -959,10 +959,11 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   set_args set_args_ar[set_size];
   int rm_size = ((int)floor(clients / 2.0));
   rm_args rm_args_ar[rm_size];
-  KeyValueStructure * kvs[clients];
+  KeyValueStructure * kvs_arr[clients];
   void *status[clients];
   map<int, pair<string, bufferlist> > bigmap;
   StopWatch * sws[clients];
+  StopWatch suicide_watch;
 
   //setup initial objects
   int count = 0;
@@ -1012,8 +1013,8 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 
   //setup kvs
   for(int i = 0; i < clients; i++) {
-    kvs[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i));
-    err = kvs[i]->setup(argc, argv);
+    kvs_arr[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i));
+    err = kvs_arr[i]->setup(argc, argv);
     if (err < 0 && err != -17) {
       cout << "error setting up client " << i << ": " << err << std::endl;
       return err;
@@ -1029,7 +1030,7 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 
     for (int j = 0; j < clients; j++) {
       if (j % 2 == 0) {
-	set_args_ar[set_index].kvs = kvs[j];
+	set_args_ar[set_index].kvs = kvs_arr[j];
 	bigmap[count] = pair<string, bufferlist>(random_string(5),
 	    KvFlatBtreeAsync::to_bl(random_string(7)));
 	set_args_ar[set_index].key = bigmap[count].first;
@@ -1047,7 +1048,7 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	set_index++;
 	count++;
       } else {
-	rm_args_ar[rm_index].kvs = kvs[j];
+	rm_args_ar[rm_index].kvs = kvs_arr[j];
 	int rm_int = -1;
 	while(bigmap.count(rm_int) == 0) {
 	  rm_int = rand() % count;
@@ -1079,10 +1080,14 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	return err;
       }
       cout << "joined " << j << std::endl;
-      if (j == clients - 1) {
+      if (j == 0) {
+	suicide_watch.start_time();
+      } else if (j == clients - 1) {
+	suicide_watch.stop_time();
 	cout << "checking consistency" << std::endl;
-	if (!kvs[j]->is_consistent()) {
-	  return -134;
+	if (suicide_watch.get_time() < utime_t(0,2000)
+	    && !kvs->is_consistent()) {
+	  return -EINCONSIST;
 	}
       }
       double time = sws[j]->get_time();
@@ -1099,16 +1104,16 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
       data.total_latency += time;
       ++(data.freq_map[time / increment]);
       if (data.freq_map[time / increment] > data.mode.second) {
-	data.mode.first = time * increment;
+	data.mode.first = time / increment;
         data.mode.second = data.freq_map[time / increment];
       }
     }
   }
   for (int j = 0; j < clients; j++) {
     if (j == clients - 1) {
-      cout << kvs[j]->str();
+      cout << kvs->str();
     }
-    delete kvs[j];
+    delete kvs_arr[j];
   }
 
   print_time_data();
@@ -1170,12 +1175,12 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
     cout << "concurrent set/rms failed: " << err << std::endl;
     return err;
   }
-  err = test_verify_random_set_rms(argc, argv);
+  //err = test_verify_random_set_rms(argc, argv);
   if (err < 0) {
     cout << "concurrent random set/rms failed: " << err << std::endl;
     return err;
   }
-  //err = test_stress_random_set_rms(argc, argv);
+  err = test_stress_random_set_rms(argc, argv);
   if (err < 0) {
     cout << "concurrent random stress test failed: " << err << std::endl;
     return err;
@@ -1194,7 +1199,7 @@ void KvStoreTest::print_time_data() {
   cout << "Average latency:\t" << data.avg_latency;
   cout << "ms\nMinimum latency:\t" << data.min_latency;
   cout << "ms\nMaximum latency:\t" << data.max_latency;
-  cout << "ms\nMode latency:\t\t"<<"between "<< data.mode.first * increment;
+  cout << "ms\nMode latency:\t\t" << "between " << data.mode.first * increment;
   cout << " and " << data.mode.first * increment + increment;
   cout << "ms\nTotal latency:\t\t" << data.total_latency;
   cout << "ms"<<std::endl;

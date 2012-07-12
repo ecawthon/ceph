@@ -8,6 +8,9 @@
 #ifndef KVFLATBTREEASYNC_H_
 #define KVFLATBTREEASYNC_H_
 
+#define ESUICIDE 134
+#define EPREFIX 136
+
 #include "key_value_store/key_value_structure.h"
 #include "include/utime.h"
 #include "include/rados.h"
@@ -23,6 +26,13 @@ struct prefix_data {
   vector<vector<string> > to_create;
   vector<vector<string> > to_delete;
   bufferlist val;
+  void clear() {
+    ts = utime_t();
+    prefix = "";
+    to_create.clear();
+    to_delete.clear();
+    val.clear();
+  }
 };
 
 class KvFlatBtreeAsync : public KeyValueStructure {
@@ -163,7 +173,7 @@ public:
     pool_name("data"),
     waits(),
     wait_index(1),
-    TIMEOUT(50000000000000,0)
+    TIMEOUT(10000,0)
   {}
 
   KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait)
@@ -180,7 +190,7 @@ public:
     pool_name("data"),
     waits(wait),
     wait_index(0),
-    TIMEOUT(50000000000000,0)
+    TIMEOUT(1000,0)
   {}
 
   /**
