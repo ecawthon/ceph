@@ -35,6 +35,15 @@ struct prefix_data {
   }
 };
 
+struct object_info {
+  string key;
+  string name;
+  map<std::string, bufferlist> omap;
+  bufferlist unwritable;
+  int version;
+  int size;
+};
+
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
   int k;
@@ -128,8 +137,8 @@ protected:
    * @param omap: map where the omap of the obj will be stored
    * @return -1 if obj does not need to be split,
    */
-  int split(const string &obj, const string &high_key, int * ver,
-      map<string,bufferlist> * omap);
+  int split(const string &obj, const string &high_key,
+      object_info *info);
 
   /**
    * reads o1 and the next object after o1 and, if necessary, rebalances them.
@@ -157,6 +166,34 @@ protected:
    * died (should be -ENOENT or -ETIMEDOUT)
    */
   int cleanup(const prefix_data &p, const int &errno);
+
+  int read_object(const string &obj, object_info * info);
+
+  void set_up_prefix_index(
+      const map<string, string> &to_create,
+      const std::set<object_info*> &to_delete,
+      librados::ObjectWriteOperation * owo,
+      prefix_data * p,
+      int * err);
+
+  void set_up_make_object(
+      const map<std::string, bufferlist> &to_set,
+      librados::ObjectWriteOperation *owo);
+
+  void set_up_unwrite_object(
+      const int &ver, librados::ObjectWriteOperation *owo);
+
+  void set_up_delete_object(
+      librados::ObjectWriteOperation *owo);
+
+  void set_up_remove_prefix(
+      const prefix_data &p,
+      librados::ObjectWriteOperation * owo,
+      int * err);
+
+  int perform_ops( const string &debug_prefix,
+      const prefix_data &p,
+      vector<pair<string, librados::ObjectWriteOperation*> > (*ops)[5]);
 
 public:
   KvFlatBtreeAsync(int k_val, string name)
