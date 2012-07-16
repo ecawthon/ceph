@@ -1007,7 +1007,6 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	cout << "error joining first pthread: " << err << std::endl;
 	return err;
     }
-    if (i == 2) cout << kvbas[i]->str();
     delete kvbas[i];
   }
 

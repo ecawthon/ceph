@@ -154,7 +154,8 @@ protected:
    * -ECANCELED if the rebalance fails due to another thread (meaning rebalance
    * should be repeated)
    */
-  int rebalance(const string &o1, const string &hk1, int *ver, bool reverse);
+  int rebalance(const string &o1, const string &hk1, object_info * info1,
+      bool reverse);
 
   /**
    * Called when a client discovers that another client has died during  a
