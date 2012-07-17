@@ -72,7 +72,7 @@ public:
   virtual int get_all_keys_and_values(map<string,bufferlist> *kv_map) = 0;
 
   /**
-   * stores keys starting at min_key and ending after max_key or after max_keys
+   * gets keys starting at min_key and ending after max_key or after max_keys
    * keys in key_set
    *
    * @param min_key the key to start at
@@ -86,12 +86,12 @@ public:
   //    std::set<string> *key_set, int max_keys) = 0;
 
   /**
-   * stores keys and values starting at min_key and ending after max_key
+   * stores keys and values starting at min_key and ending at max_key
    * or after max_keys keys in kv_map
    *
    * @param min_key the key to start at
-   * @param max_key the last key to return, unless max_keys is reached first.
-   * pass NULL to rely on max_keys instead.
+   * @param max_key the key after the last key to return, unless max_keys
+   * is reached first. pass NULL to rely on max_keys instead.
    * @param kv_map the results are stored here
    * @param max_keys the number of keys to return, unless max_key is hit first.
    * pass -1 to max_keys to get all keys in range
