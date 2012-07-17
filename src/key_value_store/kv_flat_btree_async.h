@@ -14,6 +14,7 @@
 #include "key_value_store/key_value_structure.h"
 #include "include/utime.h"
 #include "include/rados.h"
+#include "include/encoding.h"
 #include <sstream>
 #include <stdarg.h>
 
@@ -29,20 +30,67 @@ enum {
   REMOVE_PREFIX = 6
 };
 
-
-
-struct prefix_data {
+struct index_data {
   utime_t ts;
   string prefix;
   vector<vector<string> > to_create;
   vector<vector<string> > to_delete;
-  bufferlist val;
+  string val;
+
+  index_data() {
+    ts = utime_t();
+    prefix = "";
+    val = "";
+  }
+
   void clear() {
     ts = utime_t();
     prefix = "";
     to_create.clear();
     to_delete.clear();
     val.clear();
+  }
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(prefix, bl);
+    ::encode(ts, bl);
+    ::encode(prefix, bl);
+    ::encode(to_create, bl);
+    ::encode(to_delete, bl);
+    ::encode(val, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(prefix, p);
+    ::decode(ts, p);
+    ::decode(prefix, p);
+    ::decode(to_create, p);
+    ::decode(to_delete, p);
+    ::decode(val, p);
+    DECODE_FINISH(p);
+  }
+  string str() const {
+    stringstream strm;
+    strm << prefix;
+    if (prefix == "1") {
+      strm << ts.sec() << '.' << ts.usec();
+      for(vector<vector<string> >::const_iterator it = to_create.begin();
+	  it != to_create.end(); ++it) {
+	  strm << '(' << (*it)[0] << '|'
+	      << (*it)[1] << ')';
+      }
+      strm << ';';
+      for(vector<vector<string> >::const_iterator it = to_delete.begin();
+	  it != to_delete.end(); ++it) {
+	  strm << '(' << (*it)[0] << '|'
+	      << (*it)[1] << '|'
+	      << (*it)[2] << ')';
+      }
+      strm << ':';
+    }
+    strm << val;
+    return strm.str();
   }
 };
 
@@ -96,7 +144,7 @@ protected:
    * terminator
    * value
    */
-  int parse_prefix(bufferlist * bl, prefix_data * ret);
+  int parse_prefix(bufferlist * bl, index_data * ret);
 
   //These read, but do not write, librados objects
 
@@ -177,7 +225,7 @@ protected:
    * @param errno: the error that caused the client to realize the other client
    * died (should be -ENOENT or -ETIMEDOUT)
    */
-  int cleanup(const prefix_data &p, const int &errno);
+  int cleanup(const index_data &idata, const int &errno);
 
   int read_object(const string &obj, object_info * info);
 
@@ -185,14 +233,14 @@ protected:
       const map<string, string> &to_create,
       const vector<object_info*> &to_delete,
       librados::ObjectWriteOperation * owo,
-      prefix_data * p,
+      index_data * idata,
       int * err);
 
   void set_up_ops(
       const vector<map<std::string, bufferlist> > &create_maps,
       const vector<object_info*> &delete_infos,
       vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
-      const prefix_data &p,
+      const index_data &idata,
       int * err);
 
   void set_up_make_object(
@@ -209,12 +257,12 @@ protected:
       librados::ObjectWriteOperation *owo);
 
   void set_up_remove_prefix(
-      const prefix_data &p,
+      const index_data &idata,
       librados::ObjectWriteOperation * owo,
       int * err);
 
   int perform_ops( const string &debug_prefix,
-      const prefix_data &p,
+      const index_data &idata,
       vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops);
 
 public:
@@ -232,7 +280,7 @@ public:
     pool_name("data"),
     waits(),
     wait_index(1),
-    TIMEOUT(10000,0)
+    TIMEOUT(2,0)
   {}
 
   KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait)
@@ -265,6 +313,8 @@ public:
    * returns a bufferlist containing s
    */
   static bufferlist to_bl(string s);
+
+  static bufferlist to_bl(const index_data &idata);
 
   /**
    * puts escape characters before any special characters in a string that goes
