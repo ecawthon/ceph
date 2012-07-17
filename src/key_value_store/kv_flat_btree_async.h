@@ -20,6 +20,17 @@
 using namespace std;
 using ceph::bufferlist;
 
+enum {
+  ADD_PREFIX = 1,
+  MAKE_OBJECT = 2,
+  UNWRITE_OBJECT = 3,
+  RESTORE_OBJECT = 4,
+  REMOVE_OBJECT = 5,
+  REMOVE_PREFIX = 6
+};
+
+
+
 struct prefix_data {
   utime_t ts;
   string prefix;
@@ -172,9 +183,16 @@ protected:
 
   void set_up_prefix_index(
       const map<string, string> &to_create,
-      const std::set<object_info*> &to_delete,
+      const vector<object_info*> &to_delete,
       librados::ObjectWriteOperation * owo,
       prefix_data * p,
+      int * err);
+
+  void set_up_ops(
+      const vector<map<std::string, bufferlist> > &create_maps,
+      const vector<object_info*> &delete_infos,
+      vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
+      const prefix_data &p,
       int * err);
 
   void set_up_make_object(
@@ -183,6 +201,9 @@ protected:
 
   void set_up_unwrite_object(
       const int &ver, librados::ObjectWriteOperation *owo);
+
+  void set_up_restore_object(
+      librados::ObjectWriteOperation *owo);
 
   void set_up_delete_object(
       librados::ObjectWriteOperation *owo);
@@ -194,7 +215,7 @@ protected:
 
   int perform_ops( const string &debug_prefix,
       const prefix_data &p,
-      vector<pair<string, librados::ObjectWriteOperation*> > (*ops)[5]);
+      vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops);
 
 public:
   KvFlatBtreeAsync(int k_val, string name)

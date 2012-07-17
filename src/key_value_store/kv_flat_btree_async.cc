@@ -225,7 +225,7 @@ int KvFlatBtreeAsync::prev(const string &obj_high_key, const string &obj,
   prefix_data p;
   err = parse_prefix(&it->second, &p);
   if (err < 0) {
-    cout << "\t\t\t" << client_name << "-next: invalid prefix found. " << err
+    cerr << "\t\t\t" << client_name << "-next: invalid prefix found. " << err
 	<< std::endl;
     return err;
   }
@@ -274,13 +274,11 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
     object_info *info) {
   cout << "\t\t" << client_name << "-split: splitting " << obj << std::endl;
   int err = 0;
-  object_info nfo;
-  nfo.key = high_key;
+  info->key = high_key;
 
   //read obj
   cout << "\t\t" << client_name << "-split: reading " << obj << std::endl;
-  err = read_object(obj, &nfo);
-  *info = nfo;
+  err = read_object(obj, info);
   if (err < 0){
     //possibly -ENOENT, meaning someone else deleted it.
     cout << "\t\t" << client_name << "-split: reading " << obj
@@ -296,45 +294,38 @@ int KvFlatBtreeAsync::split(const string &obj, const string &high_key,
 
   ///////preparations that happen outside the critical section
   //for prefix index
-  std::map<std::string, std::string> to_create;
-  std::set<object_info*> to_delete;
   prefix_data p;
-  vector<pair<string, librados::ObjectWriteOperation*> > ops[5];
-  to_delete.insert(info);
+  std::map<std::string, std::string> to_create;
+  vector<std::map<std::string, bufferlist> > maps_to_create(2);
+  vector<object_info*> to_delete;
+  to_delete.push_back(info);
 
   //for lower half object
-  map<std::string, bufferlist> lower;
   map<std::string, bufferlist>::iterator it = info->omap.begin();
   for (int i = 0; i < k; i++) {
-    lower.insert(*it);
+    maps_to_create[0].insert(*it);
     it++;
   }
-  string low_key = "0" + lower.rbegin()->first;
+  string low_key = "0" + maps_to_create[0].rbegin()->first;
   to_create[low_key] =
       to_string(client_name, client_index++);
 
-
   //for upper half object
-  map<std::string,bufferlist> high;
-  high.insert(++info->omap.find(lower.rbegin()->first), info->omap.end());
+  maps_to_create[1].insert(
+      ++info->omap.find(maps_to_create[0].rbegin()->first), info->omap.end());
   to_create[high_key] = to_string(client_name,client_index++);
 
   //setting up operations
-  librados::ObjectWriteOperation create[2];
-  librados::ObjectWriteOperation other_ops[4];
-  ops[0].push_back(make_pair(index_name, &other_ops[0]));
-  ops[1].push_back(make_pair(to_create[low_key], &create[0]));
-  ops[1].push_back(make_pair(to_create[high_key], &create[1]));
-  ops[2].push_back(make_pair(obj, &other_ops[1]));
-  ops[3].push_back(make_pair(obj, &other_ops[2]));
-  ops[4].push_back(make_pair(index_name, &other_ops[3]));
-
-  set_up_prefix_index(to_create, to_delete, ops[0][0].second, &p, &err);
-  set_up_make_object(lower, ops[1][0].second);
-  set_up_make_object(high, ops[1][1].second);
-  set_up_unwrite_object(info->version, ops[2][0].second);
-  set_up_delete_object(ops[3][0].second);
-  set_up_remove_prefix(p, ops[4][0].second, &err);
+  librados::ObjectWriteOperation owos[6];
+  vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > ops;
+  set_up_prefix_index(to_create, to_delete, &owos[0], &p, &err);
+  ops.push_back(make_pair(
+      pair<int, string>(ADD_PREFIX, index_name),
+      &owos[0]));
+  for (int i = 1; i < 6; i++) {
+    ops.push_back(make_pair(make_pair(0,""), &owos[i]));
+  }
+  set_up_ops(maps_to_create, to_delete, &ops, p, &err);
 
   /////BEGIN CRITICAL SECTION/////
   //put prefix on index entry for obj
@@ -385,7 +376,7 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1,
 	  << " is unwritable" << std::endl;
       return -ECANCELED;
     } else {
-      cout << "\t\t" << client_name << "-rebalance: error " << err
+      cerr << "\t\t" << client_name << "-rebalance: error " << err
 	  << " reading " << o1 << std::endl;
       return err;
     }
@@ -406,7 +397,7 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1,
   if (err < 0 ||
       string(info2.unwritable.c_str(), info2.unwritable.length()) == "1") {
     if (err == 0 || err == -ENOENT) {
-      cout << "\t\t" << client_name << "-rebalance: error " << err
+      cerr << "\t\t" << client_name << "-rebalance: error " << err
 	  << " reading " << info2.name << std::endl;
       return -ECANCELED;
     } else {
@@ -435,34 +426,38 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1,
   }
   //this is the high object. it gets created regardless of rebalance or merge.
   string o2w = to_string(client_name, client_index++);
-  string o1w; //this is the low new object. it is not used for merges.
-  std::map<std::string, std::string> to_create;
-  std::set<object_info*> to_delete;
   prefix_data p;
-  vector<pair<string, librados::ObjectWriteOperation*> > ops[5];
+  std::map<std::string, std::string> to_create;
+  vector<object_info*> to_delete;
+  vector<map<std::string, bufferlist> > write_maps;
   librados::ObjectWriteOperation create[2];//possibly only 1 will be used
-  librados::ObjectWriteOperation mark[2];
-  librados::ObjectWriteOperation remove[2];
-  librados::ObjectWriteOperation index_ops[2];
-  map<std::string, bufferlist> write2_map;
+  librados::ObjectWriteOperation other_ops[6];
+  vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > ops;
+  ops.push_back(make_pair(
+      pair<int, string>(ADD_PREFIX, index_name),
+      &other_ops[0]));
 
   if (info1.size + info2.size <= 2*k) {
     //merge
     cout << "\t\t" << client_name << "-rebalance: merging " << o1
 	<< " and " << info2.name << " to get " << o2w
 	<< std::endl;
+    map<string, bufferlist> write2_map;
     write2_map.insert(info1.omap.begin(), info1.omap.end());
     write2_map.insert(info2.omap.begin(), info2.omap.end());
+    write_maps.push_back(write2_map);
     to_create[info2.key] = o2w;
-    ops[1].push_back(make_pair(o2w, &create[0]));
-    set_up_make_object(write2_map, ops[1][0].second);
+    ops.push_back(make_pair(
+	pair<int, string>(MAKE_OBJECT, o2w),
+	&create[0]));
   } else {
     //rebalance
     cout << "\t\t" << client_name << "-rebalance: rebalancing" << o1
 	<< " and " << info2.name << std::endl;
     map<std::string, bufferlist> write1_map;
+    map<std::string, bufferlist> write2_map;
     map<std::string, bufferlist>::iterator it;
-    o1w = to_string(client_name, client_index++);
+    string o1w = to_string(client_name, client_index++);
     for (it = info1.omap.begin();
 	it != info1.omap.end() && (int)write1_map.size()
 	    <= (info1.size + info2.size) / 2;
@@ -488,28 +483,24 @@ int KvFlatBtreeAsync::rebalance(const string &o1, const string &hk1,
     //at this point, write1_map and write2_map should have the correct pairs
     to_create[hk1w] = o1w;
     to_create[info2.key] = o2w;
-    ops[1].push_back(make_pair(o1w, &create[0]));
-    ops[1].push_back(make_pair(o2w, &create[1]));
-    set_up_make_object(write1_map, ops[1][0].second);
-    set_up_make_object(write2_map, ops[1][1].second);
+    write_maps.push_back(write1_map);
+    write_maps.push_back(write2_map);
+    ops.push_back(make_pair(
+	pair<int, string>(MAKE_OBJECT, o1w),
+	&create[0]));
+    ops.push_back(make_pair(
+	pair<int, string>(MAKE_OBJECT, o2w),
+	&create[1]));
+  }
+
+  to_delete.push_back(&info1);
+  to_delete.push_back(&info2);
+  for (int i = 1; i < 6; i++) {
+    ops.push_back(make_pair(make_pair(0,""), &other_ops[i]));
   }
   
-  to_delete.insert(&info1);
-  to_delete.insert(&info2);
-
-  ops[0].push_back(make_pair(index_name, &index_ops[0]));
-  ops[2].push_back(make_pair(o1, &mark[0]));
-  ops[2].push_back(make_pair(info2.name, &mark[1]));
-  ops[3].push_back(make_pair(o1, &remove[0]));
-  ops[3].push_back(make_pair(info2.name, &remove[1]));
-  ops[4].push_back(make_pair(index_name, &index_ops[1]));
-
-  set_up_prefix_index(to_create, to_delete, ops[0][0].second, &p, &err);
-  set_up_unwrite_object(info1.version, ops[2][0].second);
-  set_up_unwrite_object(info2.version, ops[2][1].second);
-  set_up_delete_object(ops[3][0].second);
-  set_up_delete_object(ops[3][1].second);
-  set_up_remove_prefix(p, ops[4][0].second, &err);
+  set_up_prefix_index(to_create, to_delete, &other_ops[0], &p, &err);
+  set_up_ops(write_maps, to_delete, &ops, p, &err);
 
   //at this point, all operations should be completely set up.
   /////BEGIN CRITICAL SECTION/////
@@ -543,7 +534,7 @@ int KvFlatBtreeAsync::read_object(const string &obj, object_info * info) {
 
 void KvFlatBtreeAsync::set_up_prefix_index(
     const map<string, string> &to_create,
-    const std::set<object_info*> &to_delete,
+    const vector<object_info*> &to_delete,
     librados::ObjectWriteOperation * owo,
     prefix_data * p,
     int * err) {
@@ -561,7 +552,7 @@ void KvFlatBtreeAsync::set_up_prefix_index(
 	<< to_string_f(it->second) << pair_end;
   }
   strm << sub_terminator;
-  for(std::set<object_info*>::const_iterator it = to_delete.begin();
+  for(vector<object_info*>::const_iterator it = to_delete.begin();
       it != to_delete.end();
       ++it) {
     strm << pair_init << to_string_f((*it)->key) << sub_separator
@@ -569,7 +560,7 @@ void KvFlatBtreeAsync::set_up_prefix_index(
 	  << (*it)->version << pair_end;
   }
   strm << terminator;
-  for(std::set<object_info*>::const_iterator it = to_delete.begin();
+  for(vector<object_info*>::const_iterator it = to_delete.begin();
       it != to_delete.end();
       ++it) {
     assert((*it)->name[0] != '0');
@@ -587,19 +578,84 @@ void KvFlatBtreeAsync::set_up_prefix_index(
   owo->omap_set(to_insert);
 }
 
+//some args can be null if there are no corresponding entries in p
+void KvFlatBtreeAsync::set_up_ops(
+    const vector<map<std::string, bufferlist> > &create_maps,
+    const vector<object_info*> &delete_infos,
+    vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
+    const prefix_data &p,
+    int * err) {
+  vector<pair<pair<int, string>,
+    librados::ObjectWriteOperation* > >::iterator it;
+  for(it = ops->begin();
+      it->first.first == ADD_PREFIX; it++){
+//    cout << client_name << ": type is " <<  it->first.first << std::endl;
+  }
+//  cout << client_name << ": type is " <<  it->first.first << std::endl;
+  map<string, bufferlist> to_insert;
+  std::set<string> to_remove;
+  map<string, pair<bufferlist, int> > assertions;
+  for (int i = 0; i < (int)p.to_create.size(); ++i) {
+    to_insert[p.to_create[i][0]] = to_bl("0" + p.to_create[i][1]);
+    if (create_maps.size() > 0) {
+      it->first = pair<int, string>(MAKE_OBJECT, p.to_create[i][1]);
+/*      cout << client_name << " i is " << i << " obj is " << p.to_create[i][1]
+           << " owo: " << it->second << " type: "
+           << (it)->first.first << " create size: " << create_maps.size()
+           << std::endl;*/
+      set_up_make_object(create_maps[i], it->second);
+      it++;
+    }
+  }
+  if (delete_infos.size() > 0) {
+    for (int i = 0; i < (int)p.to_delete.size(); ++i) {
+      it->first = pair<int, string>(UNWRITE_OBJECT, p.to_delete[i][1]);
+      set_up_unwrite_object(delete_infos[i]->version, it->second);
+      it++;
+    }
+  }
+  for (int i = 0; i < (int)p.to_delete.size(); ++i) {
+    assertions[p.to_delete[i][0]] = pair<bufferlist, int>(
+	to_bl(p.prefix + p.to_delete[i][1]), CEPH_OSD_CMPXATTR_OP_EQ);
+    to_remove.insert(p.to_delete[i][0]);
+    it->first = pair<int, string>(REMOVE_OBJECT, p.to_delete[i][1]);
+    /*cout << client_name << " i is " << i << " obj is " << p.to_delete[i][1]
+         << " owo: " << it->second << " type: "
+         << it->first.first << " delete size: " << p.to_delete.size()
+         << std::endl;*/
+    set_up_delete_object(it->second);
+    it++;
+  }
+  it->second->omap_cmp(assertions, err);
+  it->second->omap_rm_keys(to_remove);
+  it->second->omap_set(to_insert);
+
+  it->first = pair<int, string>(REMOVE_PREFIX, index_name);
+}
+
 void KvFlatBtreeAsync::set_up_make_object(
     const map<std::string, bufferlist> &to_set,
     librados::ObjectWriteOperation *owo) {
   owo->create(true);
   owo->omap_set(to_set);
   owo->setxattr("unwritable", to_bl("0"));
+  cout << client_name << "-owo: " << owo << std::endl;
 }
 
 void KvFlatBtreeAsync::set_up_unwrite_object(
     const int &ver, librados::ObjectWriteOperation *owo) {
-  owo->assert_version(ver);
-  owo->cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("0"));
+  if (ver > 0) {
+    cout << client_name << ": version "  << ver << " > 0, so assert" << std::endl;
+    owo->assert_version(ver);
+  }
+  //owo->cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("0"));
   owo->setxattr("unwritable", to_bl("1"));
+}
+
+void KvFlatBtreeAsync::set_up_restore_object(
+    librados::ObjectWriteOperation *owo) {
+  owo->cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("1"));
+  owo->setxattr("unwritable", to_bl("0"));
 }
 
 void KvFlatBtreeAsync::set_up_delete_object(
@@ -608,108 +664,84 @@ void KvFlatBtreeAsync::set_up_delete_object(
   owo->remove();
 }
 
-void KvFlatBtreeAsync::set_up_remove_prefix(
-    const prefix_data &p,
-    librados::ObjectWriteOperation * owo,
-    int * err) {
-  map<string, bufferlist> to_insert;
-  std::set<string> to_remove;
-  map<string, pair<bufferlist, int> > assertions;
-  for (vector<vector<string> >::const_iterator it = p.to_create.begin();
-      it != p.to_create.end(); ++it) {
-    to_insert[(*it)[0]] = to_bl("0" + (*it)[1]);
-  }
-  for (vector<vector<string> >::const_iterator it = p.to_delete.begin();
-      it != p.to_delete.end(); ++it) {
-    assertions[(*it)[0]] = pair<bufferlist, int>(
-	to_bl(p.prefix + (*it)[1]), CEPH_OSD_CMPXATTR_OP_EQ);
-    to_remove.insert((*it)[0]);
-  }
-  owo->omap_cmp(assertions, err);
-  owo->omap_rm_keys(to_remove);
-  owo->omap_set(to_insert);
-}
-
 int KvFlatBtreeAsync::perform_ops(const string &debug_prefix,
     const prefix_data &p,
-    vector<pair<string, librados::ObjectWriteOperation*> > (*ops)[5]) {
+    vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > *ops) {
   int err = 0;
-  for (int i = 0; i < 5; ++i) {
+  for (vector<pair<pair<int, string>,
+      librados::ObjectWriteOperation*> >::iterator it = ops->begin();
+      it != ops->end(); ++it) {
     if (interrupt() == 1 ) {
       return -ESUICIDE;
     }
-    switch (i) {
-    case 0://prefixing
+    switch (it->first.first) {
+    case ADD_PREFIX://prefixing
       cout << debug_prefix << " adding prefix" << std::endl;
-      err = io_ctx.operate(index_name, (*ops[i])[0].second);
+      err = io_ctx.operate(index_name, it->second);
       if (err < 0) {
         cout << debug_prefix << " prefixing the index failed with "
             << err << std::endl;
         return err;
       }
-      cout << debug_prefix << " debug_prefix added." << std::endl;
+      cout << debug_prefix << " prefix added." << std::endl;
       break;
-    case 1://creating
-      for (vector<pair<string, librados::ObjectWriteOperation*> >::iterator it
-  	= (*ops)[i].begin(); it != (*ops)[i].end(); ++it) {
-        cout << debug_prefix << " creating" << it->first << std::endl;
-        err = io_ctx.operate(it->first, it->second);
-        if (err < 0) {
-          //this can happen if someone else was cleaning up after us.
-          cout << debug_prefix << " creating " << it->first << " failed"
-              << " with code " << err << std::endl;
-          if (err == -EEXIST) {
-            //someone thinks we died, so die
-            return -ESUICIDE;
-          } else {
-            assert(false);
-          }
-          return err;
-        }
-        cout << debug_prefix << " created " << it->first << std::endl;
-        if (interrupt() == 1 ) {
-          return -ESUICIDE;
-        }
-      }
-      break;
-    case 2://marking
-      for (vector<pair<string, librados::ObjectWriteOperation*> >::iterator it
-  	= (*ops)[i].begin(); it != (*ops)[i].end(); ++it) {
-	cout << debug_prefix << " marking " << it->first << std::endl;
-	err = io_ctx.operate(it->first, it->second);
-	if (err < 0) {
-	  //most likely because it changed, in which case it will be -ERANGE
-	  cout << debug_prefix << " marking " << it->first
-	      << "failed with code" << err << std::endl;
-	  cleanup(p, -ETIMEDOUT);
-	  return -ECANCELED;
-	}
-	cout << debug_prefix << " marked " << it->first << std::endl;
-        if (interrupt() == 1 ) {
-          return -ESUICIDE;
-        }
-      }
-      break;
-    case 3://deleting
-      for (vector<pair<string, librados::ObjectWriteOperation*> >::iterator it
-  	= (*ops)[i].begin(); it != (*ops)[i].end(); ++it) {
-	cout << debug_prefix << " deleting " << it->first << std::endl;
-	err = io_ctx.operate(it->first, it->second);
-	if (err < 0) {
-	  //most likely because it changed, in which case it will be -ERANGE
-	  cout << debug_prefix << " deleting " << it->first
-	      << "failed with code" << err << std::endl;
+    case MAKE_OBJECT://creating
+      cout << debug_prefix << " creating " << it->first.second
+	<< ", address = " << it->second << std::endl;
+      err = io_ctx.operate(it->first.second, it->second);
+      if (err < 0) {
+	//this can happen if someone else was cleaning up after us.
+	cout << debug_prefix << " creating " << it->first.second << " failed"
+	    << " with code " << err << std::endl;
+	if (err == -EEXIST) {
+	  //someone thinks we died, so die
+	  assert(false);
+	  cout << client_name << " is suiciding!" << std::endl;
 	  return -ESUICIDE;
+	} else {
+	  assert(false);
 	}
-	cout << debug_prefix << " deleted " << it->first << std::endl;
-        if (interrupt() == 1 ) {
-          return -ESUICIDE;
-        }
+	return err;
       }
+      cout << debug_prefix << " created " << it->first.second << std::endl;
       break;
-    case 4://rewriting index
+    case UNWRITE_OBJECT://marking
+      cout << debug_prefix << " marking " << it->first.second << std::endl;
+      err = io_ctx.operate(it->first.second, it->second);
+      if (err < 0) {
+	//most likely because it changed, in which case it will be -ERANGE
+	cout << debug_prefix << " marking " << it->first.second
+	    << "failed with code" << err << std::endl;
+	cleanup(p, -ETIMEDOUT);
+	return -ECANCELED;
+      }
+      cout << debug_prefix << " marked " << it->first.second << std::endl;
+      break;
+    case RESTORE_OBJECT:
+      cout << debug_prefix << " retsoring " << it->first.second << std::endl;
+      err = io_ctx.operate(it->first.second, it->second);
+      if (err < 0) {
+	cout << debug_prefix << "restoring " << it->first.second << " failed"
+	    << " with " << err << std::endl;
+	return err;
+      }
+      cout << debug_prefix << " restored " << it->first.second << std::endl;
+      break;
+    case REMOVE_OBJECT://deleting
+      cout << debug_prefix << " deleting " << it->first.second << std::endl;
+      err = io_ctx.operate(it->first.second, it->second);
+      if (err < 0) {
+	//if someone else called cleanup on this prefix first
+	cout << debug_prefix << " deleting " << it->first.second
+	    << "failed with code" << err << std::endl;
+	cout << client_name << " is suiciding!" << std::endl;
+	return -ESUICIDE;
+      }
+      cout << debug_prefix << " deleted " << it->first.second << std::endl;
+      break;
+    case REMOVE_PREFIX://rewriting index
       cout << debug_prefix << " updating index " << std::endl;
-      err = io_ctx.operate(index_name, (*ops)[i][0].second);
+      err = io_ctx.operate(index_name, it->second);
       if (err < 0) {
         cout << debug_prefix
     	<< " rewriting the index failed with code " << err
@@ -718,6 +750,18 @@ int KvFlatBtreeAsync::perform_ops(const string &debug_prefix,
         return -ESUICIDE;
       }
       cout << debug_prefix << " updated index." << std::endl;
+      break;
+    default:
+      cout << debug_prefix << " performing unknown op on " << it->first.second
+	<< std::endl;
+      err = io_ctx.operate(index_name, it->second);
+      if (err < 0) {
+	cout << debug_prefix << " unknown op on " << it->first.second
+	    << " failed with " << err << std::endl;
+	return err;
+      }
+      cout << debug_prefix << " unknown op on " << it->first.second
+	  << " succeeded." << std::endl;
       break;
     }
   }
@@ -736,48 +780,16 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
     cout << "\t\t" << client_name << "-cleanup: rolling forward" << std::endl;
     //all changes were created except for updating the index and possibly
     //deleting the objects. roll forward.
-    std::set<std::string> rm_index;
-    for(vector<vector<string> >::const_iterator it =
-	p.to_create.begin();
-	it != p.to_create.end(); ++it) {
-      cout << "\t\t\t" << client_name << "-cleanup: will add ("
-	  << (*it)[0] << ", " << (*it)[1] << ") to index" << std::endl;
-      new_index[(*it)[0]] = to_bl("0" + (*it)[1]);
+    vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > ops;
+    librados::ObjectWriteOperation owos[p.to_delete.size() + 1];
+    for (int i = 0; i <= (int)p.to_delete.size(); ++i) {
+      ops.push_back(make_pair(pair<int, string>(0, ""), &owos[i]));
     }
-    for(vector<vector <string> >::const_iterator it =
-	p.to_delete.begin();
-	it != p.to_delete.end(); ++it) {
-      librados::ObjectWriteOperation rm;
-      if (interrupt() == 1 ) {
-	return -ESUICIDE;
-      }
-      //this assert should never fail.
-      rm.cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("1"));
-      rm.remove();
-      cout << "\t\t\t" << client_name << "-cleanup: deleting " << (*it)[1]
-	   << std::endl;
-      err = io_ctx.operate((*it)[1], &rm);
-      if (err < 0 && err != -ENOENT) {
-	//someone else probably got here first.
-	cout << "\t\t\t" << client_name << "-cleanup: error deleting "
-	    << (*it)[1] << ": " << err << std::endl;
-	assert(false);
-	return err;
-      }
-      assertions[(*it)[0]] =
-	  pair<bufferlist, int>(to_bl(p.prefix + (*it)[1]),
-	      CEPH_OSD_CMPXATTR_OP_EQ);
-      rm_index.insert((*it)[0]);
-    }
-    librados::ObjectWriteOperation update_index;
-    update_index.omap_cmp(assertions, &err);
-    update_index.omap_rm_keys(rm_index);
-    update_index.omap_set(new_index);
-    if (interrupt() == 1 ) {
-      return -ESUICIDE;
-    }
-    cout << "\t\t\t" << client_name << "-cleanup: updating index" << std::endl;
-    err = io_ctx.operate(index_name, &update_index);
+    //vector<map<std::string, bufferlist> > create_maps;
+    //vector<object_info*> delete_infos;
+    set_up_ops(vector<map<std::string, bufferlist> >(),
+	vector<object_info*>(), &ops, p, &err);
+    err = perform_ops("\t\t" + client_name + "-cleanup:", p, &ops);
     if (err < 0) {
       cout << "\t\t\t" << client_name << "-cleanup: rewriting failed with "
 	  << err << ". returning -ECANCELED" << std::endl;
@@ -798,14 +810,14 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
       librados::ObjectWriteOperation rm;
       rm.setxattr("unwritable", to_bl("0"));
       cout << "\t\t\t" << client_name << "-cleanup: marking " << (*it)[1]
-	  << std::endl;
+	<< std::endl;
       if (interrupt() == 1 ) {
-        return -ESUICIDE;
+	return -ESUICIDE;
       }
       err = io_ctx.operate((*it)[1], &rm);
       if (err < 0) {
 	cout << "\t\t\t" << client_name << "-cleanup: marking " << (*it)[1]
-	    << " failed with " << err << std::endl;
+            << " failed with " << err << std::endl;
       }
     }
     for(vector<vector<string> >::const_iterator it =
@@ -819,14 +831,14 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
       restore.cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("1"));
       restore.setxattr("unwritable", to_bl("0"));
       cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
-	  << std::endl;
+                                                                         << std::endl;
       cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
 	  << "(" << (*it)[0] << "," << p.prefix << (*it)[1]
-	  << ")" << std::endl;
+	       << ")" << std::endl;
       cout << "\t\t\t" << client_name << "-cleanup: (*it)[1] is " << (*it)[1]
-           << std::endl;
+	   << std::endl;
       if (interrupt() == 1 ) {
-        return -ESUICIDE;
+	return -ESUICIDE;
       }
       err = io_ctx.operate((*it)[1], &restore);
       if (err == -ENOENT) {
@@ -834,7 +846,7 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
 	return cleanup(p, err);
       }
       cout << "\t\t\t" << client_name << "-cleanup: restored " << (*it)[1]
-	  << std::endl;
+                                                                        << std::endl;
     }
     for(vector<vector<string> >::const_reverse_iterator it =
 	p.to_create.rbegin();
@@ -843,9 +855,9 @@ int KvFlatBtreeAsync::cleanup(const prefix_data &p, const int &errno) {
       librados::ObjectWriteOperation rm;
       rm.remove();
       cout << "\t\t\t" << client_name << "-cleanup: removing " << (*it)[1]
-	  << std::endl;
+                                                                        << std::endl;
       if (interrupt() == 1 ) {
-        return -ESUICIDE;
+	return -ESUICIDE;
       }
       io_ctx.operate((*it)[1], &rm);
     }
@@ -984,8 +996,8 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     err = oid("0"+key, &objb, &hk);
     mytime = ceph_clock_now(g_ceph_context);
     if (err < 0) {
-      cout << "getting oid failed with code " << err;
-      cout << std::endl;
+      err << "\t" << client_name << ": getting oid failed with code "
+	  << err << std::endl;
       return err;
     }
     p.clear();
@@ -1002,7 +1014,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     cout << "\t" << client_name << ": running split on " << obj << std::endl;
     err = split(obj, hk, &o);
     if (err < 0) {
-      cout << "\t" << client_name << ": split returned " << err << std::endl;
+      cerr << "\t" << client_name << ": split returned " << err << std::endl;
       if (p.prefix == "" && err == -EPREFIX) {
         oid("0"+key, &objb, &hk);
         parse_prefix(&objb, &p);
@@ -1052,16 +1064,15 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
       << string(to_insert[key].c_str(),
       to_insert[key].length()) << " into object " << obj
       << " with version " << o.version << std::endl;
-  cout << str();
   if (err < 0) {
-    cout << "performing insertion failed with code " << err;
+    cerr << "performing insertion failed with code " << err;
     cout << std::endl;
   }
   write_aioc->wait_for_safe();
   err = write_aioc->get_return_value();
-  cout << "\t" << client_name << ": write finished with " << err << std::endl;
+  cerr << "\t" << client_name << ": write finished with " << err << std::endl;
   if (err < 0) {
-    cout << "\t" << client_name << ": writing obj failed. "
+    cerr << "\t" << client_name << ": writing obj failed. "
 	<< "probably failed assert. " << err << std::endl;
     return set(key, val, update_on_existing);
   }
@@ -1070,6 +1081,9 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     cleanup(p,-ETIMEDOUT);
   }
   err = rebalance(obj, hk, &o, false);
+  if (err == -ESUICIDE) {
+    return err;
+  }
   if (p.prefix != "" && mytime - p.ts > TIMEOUT) {
     cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
     //the client died after deleting the object. clean up.
@@ -1098,13 +1112,12 @@ int KvFlatBtreeAsync::remove(const string &key) {
     err = oid("0"+key, &objb, &hk);
     mytime = ceph_clock_now(g_ceph_context);
     if (err < 0) {
-      cout << "getting oid failed with code " << err;
-      cout << std::endl;
+      cerr << "getting oid failed with code " << err << std::endl;
       return err;
     }
     err = parse_prefix(&objb, &p);
     if (err < 0) {
-      cout << "\t" << client_name << ": parsing prefix failed - bad prefix. "
+      cerr << "\t" << client_name << ": parsing prefix failed - bad prefix. "
 	  << err <<  std::endl;
       return err;
     }
@@ -1116,7 +1129,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
     cout << "\t" << client_name << ": rebalancing " << obj << std::endl;
     err = rebalance(obj, hk, &info, false);
     if (err < 0) {
-      cout << "\t" << client_name << ": rebalance returned " << err
+      cerr << "\t" << client_name << ": rebalance returned " << err
 	  << std::endl;
       if (err == -ENOENT) {
 	if (p.prefix != "" && mytime - p.ts <= TIMEOUT) {
@@ -1148,8 +1161,8 @@ int KvFlatBtreeAsync::remove(const string &key) {
   if (interrupt() == 1 ) {
     return -ESUICIDE;
   }
-  cout << "\t" << client_name << ": removing. asserting version "
-      << info.version << std::endl;
+  cout << "\t" << client_name << ": removing from " << obj
+      << ". asserting version " << info.version << std::endl;
   err = io_ctx.aio_operate(obj, write_aioc, &owo);
   write_aioc->wait_for_safe();
   cout << "\t" << client_name << ": remove finished."
@@ -1167,7 +1180,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
   }
   do {
     err = rebalance(obj, hk, &info, false);
-    cout << "\t" << client_name << ": rebalance after remove got " << err
+    cerr << "\t" << client_name << ": rebalance after remove got " << err
 	<< std::endl;
     if (err == -ESUICIDE) {
       return err;
@@ -1212,7 +1225,7 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   err = oid("0"+key, &objb, &hk);
   mytime = ceph_clock_now(g_ceph_context);
   if (err < 0) {
-    cout << "getting oid failed with code " << err;
+    cerr << "getting oid failed with code " << err;
     cout << std::endl;
     return err;
   }
@@ -1225,7 +1238,7 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   }
   obj = string(p.val.c_str(), p.val.length());
   if (err < 0) {
-    cout << "getting oid failed with code " << err;
+    cerr << "getting oid failed with code " << err;
     cout << std::endl;
     return err;
   }
@@ -1245,7 +1258,7 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
        cleanup(p, err);
       }
     } else {
-      cout << "split encountered an unexpected error: " << err << std::endl;
+      cerr << "split encountered an unexpected error: " << err << std::endl;
       return err;
     }
   }
@@ -1282,8 +1295,8 @@ int KvFlatBtreeAsync::remove_all() {
   io_ctx.aio_operate(index_name, rm_index_aioc, &rm_index);
   err = rm_index_aioc->get_return_value();
   if (err < 0) {
-    cout << "rm index aioc failed - probably failed assertion. " << err;
-    cout << std::endl;
+    cerr << "rm index aioc failed - probably failed assertion. " << err;
+    cerr << std::endl;
     return remove_all();
   }
 
