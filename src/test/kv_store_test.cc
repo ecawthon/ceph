@@ -1123,7 +1123,7 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 int KvStoreTest::functionality_tests() {
   int err = 0;
   cout << "initial remove all successful" << std::endl;
-  err = test_set_get_rm_one_kv();
+  //err = test_set_get_rm_one_kv();
   cout << std::endl;
   if (err < 0) {
     cout << "set/getting one value failed with code " << err;
@@ -1141,13 +1141,13 @@ int KvStoreTest::functionality_tests() {
 int KvStoreTest::stress_tests() {
   int err = 0;
   kvs->remove_all();
-  err = test_non_random_insert_gets();
+  //err = test_non_random_insert_gets();
   if (err < 0) {
     cout << "non-random inserts and gets failed with code " << err;
     cout << std::endl;
     return err;
   }
-  err = test_random_insertions();
+  //err = test_random_insertions();
   if (err < 0) {
     cout << "random insertions test failed with code " << err;
     cout << std::endl;
@@ -1232,8 +1232,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.verification_tests(argc, argv);
-  //err = kvst.functionality_tests();
+  //err = kvst.verification_tests(argc, argv);
+  err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();
   return 0;

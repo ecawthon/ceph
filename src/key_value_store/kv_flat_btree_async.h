@@ -30,26 +30,48 @@ enum {
   REMOVE_PREFIX = 6
 };
 
+
+/**
+ * The index object is a key value map that stores
+ * the highest key stored in an object as keys, and an index_data
+ * as the corresponding value. The index_data contains the name
+ * of the librados object where keys containing that range of keys
+ * are located, and information about split and merge operations that
+ * may need to be cleaned up if a client dies.
+ */
 struct index_data {
-  utime_t ts;
+  //"1" if there is a prefix (because a split or merge is
+  //in progress), otherwise ""
   string prefix;
+  utime_t ts; //time that a split/merge started
+  //objects to be created. the elements have
+  //two elements, first the (encoded) key, then the object name.
   vector<vector<string> > to_create;
+  //objects to be deleted. The elements have three elements, first,
+  //the (encoded) key, then the object name, and finally, the version number of
+  //the object to be deleted at the last read.
   vector<vector<string> > to_delete;
-  string val;
 
-  index_data() {
-    ts = utime_t();
-    prefix = "";
-    val = "";
+  //the encoded key corresponding to the object
+  string key;
+  //the name of the object where the key range is located.
+  string obj;
+
+  index_data()
+  {}
+
+  index_data(string raw_key)
+  {
+    if (raw_key == ""){
+      key = "1";
+    } else {
+      key = "0" + raw_key;
+    }
   }
 
-  void clear() {
-    ts = utime_t();
-    prefix = "";
-    to_create.clear();
-    to_delete.clear();
-    val.clear();
-  }
+  //true if there is a prefix and now - ts > timeout.
+  bool is_timed_out(utime_t now);
+
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
     ::encode(prefix, bl);
@@ -57,9 +79,10 @@ struct index_data {
     ::encode(prefix, bl);
     ::encode(to_create, bl);
     ::encode(to_delete, bl);
-    ::encode(val, bl);
+    ::encode(obj, bl);
     ENCODE_FINISH(bl);
   }
+
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
     ::decode(prefix, p);
@@ -67,12 +90,24 @@ struct index_data {
     ::decode(prefix, p);
     ::decode(to_create, p);
     ::decode(to_delete, p);
-    ::decode(val, p);
+    ::decode(obj, p);
     DECODE_FINISH(p);
   }
+
+  /*
+   * Prints a string representation of the information, in the following format:
+   * (key,
+   * prefix
+   * ts
+   * elements of to_create, organized into (high key| obj name)
+   * ;
+   * elements of to_delete, organized into (high key| obj name | version number)
+   * :
+   * val)
+   */
   string str() const {
     stringstream strm;
-    strm << prefix;
+    strm << '(' << key << ',' << prefix;
     if (prefix == "1") {
       strm << ts.sec() << '.' << ts.usec();
       for(vector<vector<string> >::const_iterator it = to_create.begin();
@@ -89,18 +124,37 @@ struct index_data {
       }
       strm << ':';
     }
-    strm << val;
+    strm << obj << ')';
     return strm.str();
   }
 };
 
-struct object_info {
-  string key;
-  string name;
-  map<std::string, bufferlist> omap;
-  bufferlist unwritable;
-  int version;
-  int size;
+/**
+ * Stores information read from a librados object.
+ */
+struct object_data {
+  string raw_key; //the max key
+  string name; //the object's name
+  map<std::string, bufferlist> omap; // the omap of the object
+  bool unwritable; // an xattr that, if false, means an op is in
+		  // progress and other clients should not write to it.
+  int version; //the version at time of read
+  int size; //the number of elements in the omap
+
+  object_data()
+  {}
+
+  object_data(string the_key, string the_name)
+  : raw_key(the_key),
+    name(the_name)
+  {}
+
+  object_data(string the_key, string the_name,
+      map<std::string, bufferlist> the_omap)
+  : raw_key(the_key),
+    name(the_name),
+    omap(the_omap)
+  {}
 };
 
 class KvFlatBtreeAsync : public KeyValueStructure {
@@ -120,7 +174,9 @@ protected:
   string pool_name;
   vector<__useconds_t> waits;
   int wait_index;
+  const static int timeout_seconds = 1;
   utime_t TIMEOUT;
+  friend struct index_data;
 
   /**
    * Waits for a period determined by the waits vector (does not wait if waits
@@ -128,62 +184,40 @@ protected:
    */
   int interrupt();
 
-  /*
-   * creates a prefix_data with the information contained in the prefix of
-   * the bufferlist.
-   *
-   * prefixes should be in the format:
-   * 1 (to indicate that there is a prefix)
-   * timestamp
-   * sub_terminator
-   * objects to be created, organized into pair_init high key sub_separator
-   * obj name pair_end, separated by separators
-   * sub_terminator
-   * objects to be removed, organized into pair_init high key sub_separator
-   * obj name sub_separator version number pair_end, separated by separators
-   * terminator
-   * value
-   */
-  int parse_prefix(bufferlist * bl, index_data * ret);
-
   //These read, but do not write, librados objects
 
   /**
    * finds the object in the index with the lowest key value that is greater
-   * than obj_high_key. If obj_high_key is the max key, ret_high_key and ret
-   * are set to obj_high_key and obj, respectively.
+   * than obj_high_key. If obj_high_key is the max key, returns -EOVERFLOW
    *
    * @param obj_high_key: the key stored in the index for obj
    * @param obj: the name of the object to search for
    * @param ret_high_key: string to store the key of the next high object
    * @param ret: string to store the name of the next high object
    */
-  int next(const string &obj_high_key, const string &obj,
-      string * ret_high_key, string *ret);
+  int next(const index_data &idata, index_data * out_data);
 
   /**
    * finds the object in the index with the lowest key value that is greater
-   * than obj_high_key. If obj_high_key is the max key, ret_high_key and ret
-   * are set to obj_high_key and obj, respectively.
+   * than obj_high_key. If obj_high_key is the lowest key, returns -ERANGE
    *
    * @param obj_high_key: the key stored in the index for obj
    * @param obj: the name of the object to search for
    * @param ret_high_key: string to store the key of the next high object
    * @param ret: string to store the name of the next high object
    */
-  int prev(const string &obj_high_key, const string &obj,
-      string * ret_high_key, string *ret);
+  int prev(const index_data &idata, index_data * out_data);
 
   /**
-   * finds the object where a key belongs.
+   * finds the index_data and high key where a key belongs.
    *
-   * @param key: the key to search for - should either have a 0 befor it or be
-   * 1 (the max key)
+   * @param key: the key to search for
    * @param raw_val: the bufferlist in the first index value such that its key
    * is greater than key. This may include a prefix.
-   * @param max_key: string where the key of the object should be stored
+   * @param max_key: string where the (encoded) key of the object should be
+   * stored
    */
-  int oid(const string &key, bufferlist * raw_val, string * max_key);
+  int read_index(const string &key, index_data * idata);
 
   //These sometimes modify objects and the index
 
@@ -191,13 +225,11 @@ protected:
    * Reads obj and generates information about it. If necessary, splits it.
    *
    * @param obj: the object to read/split
-   * @param high_key: the key of obj in the index
-   * @param ver: int to store the version number of the read
-   * @param omap: map where the omap of the obj will be stored
+   * @param high_key: the (encoded) key of obj in the index
+   * @param info: all information read from the object
    * @return -1 if obj does not need to be split,
    */
-  int split(const string &obj, const string &high_key,
-      object_info *info);
+  int split(const index_data &idata, object_data *odata);
 
   /**
    * reads o1 and the next object after o1 and, if necessary, rebalances them.
@@ -206,39 +238,48 @@ protected:
    *
    * @param o1: the name of the object to check
    * @param hk1: the key corresponding to o1
-   * @param ver: the version number of o1 (or, if reverse, of the next object)
+   * @param info1: all the information read from the object
    * @param reverse: if true, ver will be the version of the next object after
    * o1. This is used when rebalance calls itself on the previous object.
    * @return -1 if no change needed, -ENOENT if o1 does not exist,
    * -ECANCELED if the rebalance fails due to another thread (meaning rebalance
    * should be repeated)
    */
-  int rebalance(const string &o1, const string &hk1, object_info * info1,
+  int rebalance(const index_data &idata1, object_data * odata1,
       bool reverse);
 
   /**
    * Called when a client discovers that another client has died during  a
    * split or a merge. cleans up after that client.
    *
-   * @param p: the prefix data parsed from the index entry left by the dead
+   * @param idata: the index data parsed from the index entry left by the dead
    * client.
    * @param errno: the error that caused the client to realize the other client
    * died (should be -ENOENT or -ETIMEDOUT)
+   * @post: rolls forward if -ENOENT, otherwise rolls back.
    */
   int cleanup(const index_data &idata, const int &errno);
 
-  int read_object(const string &obj, object_info * info);
+  /**
+   * performs an ObjectReadOperation to populate info
+   */
+  int read_object(const string &obj, object_data * odata);
 
+  /**
+   * sets up owo to change the index in preparation for a split/merge.
+   *
+   * @param to_create: the objects to be created, as a map of encoded keys to values
+   */
   void set_up_prefix_index(
-      const map<string, string> &to_create,
-      const vector<object_info*> &to_delete,
+      const vector<object_data> &to_create,
+      const vector<object_data> &to_delete,
       librados::ObjectWriteOperation * owo,
       index_data * idata,
       int * err);
 
   void set_up_ops(
-      const vector<map<std::string, bufferlist> > &create_maps,
-      const vector<object_info*> &delete_infos,
+      const vector<object_data> &create_data,
+      const vector<object_data> &delete_data,
       vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
       const index_data &idata,
       int * err);
