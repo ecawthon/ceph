@@ -30,6 +30,45 @@ enum {
   REMOVE_PREFIX = 6
 };
 
+/**
+ * stores information about a key in the index.
+ *
+ * prefix is "0" unless key is "", in which case it is "1". This ensures that
+ * the object with key "" will always be the highest key in the index.
+ */
+struct key_data {
+  string raw_key;
+  string prefix;
+
+  key_data()
+  {}
+
+  /**
+   * @pre: key is a raw key (does not contain a prefix)
+   */
+  key_data(string key)
+  : raw_key(key)
+  {
+    raw_key == "" ? prefix = "1" : prefix = "0";
+  }
+
+  /**
+   * parses the prefix from encoded and stores the data in this.
+   *
+   * @pre: encoded has a prefix
+   */
+  void parse(string encoded) {
+    prefix = encoded[0];
+    raw_key = encoded.substr(1,encoded.length());
+  }
+
+  /**
+   * returns a string containing the encoded (prefixed) key
+   */
+  string encoded() const {
+    return prefix + raw_key;
+  }
+};
 
 /**
  * The index object is a key value map that stores
@@ -53,7 +92,7 @@ struct index_data {
   vector<vector<string> > to_delete;
 
   //the encoded key corresponding to the object
-  string key;
+  key_data kdata;
   //the name of the object where the key range is located.
   string obj;
 
@@ -61,13 +100,8 @@ struct index_data {
   {}
 
   index_data(string raw_key)
-  {
-    if (raw_key == ""){
-      key = "1";
-    } else {
-      key = "0" + raw_key;
-    }
-  }
+  : kdata(raw_key)
+  {}
 
   //true if there is a prefix and now - ts > timeout.
   bool is_timed_out(utime_t now);
@@ -107,7 +141,7 @@ struct index_data {
    */
   string str() const {
     stringstream strm;
-    strm << '(' << key << ',' << prefix;
+    strm << '(' << kdata.encoded() << ',' << prefix;
     if (prefix == "1") {
       strm << ts.sec() << '.' << ts.usec();
       for(vector<vector<string> >::const_iterator it = to_create.begin();
@@ -133,7 +167,7 @@ struct index_data {
  * Stores information read from a librados object.
  */
 struct object_data {
-  string raw_key; //the max key, from the index
+  key_data kdata; //the max key, from the index
   string name; //the object's name
   map<std::string, bufferlist> omap; // the omap of the object
   bool unwritable; // an xattr that, if false, means an op is in
@@ -144,20 +178,24 @@ struct object_data {
   object_data()
   {}
 
-  object_data(string the_key, string the_name)
-  : raw_key(the_key),
+  object_data(string the_name)
+  : name(the_name)
+  {}
+
+  object_data(key_data kdat, string the_name)
+  : kdata(kdat),
     name(the_name)
   {}
 
-  object_data(string the_key, string the_name,
+  object_data(key_data kdat, string the_name,
       map<std::string, bufferlist> the_omap)
-  : raw_key(the_key),
+  : kdata(kdat),
     name(the_name),
     omap(the_omap)
   {}
 
-  object_data(string the_key, string the_name, int the_version)
-  : raw_key(the_key),
+  object_data(key_data kdat, string the_name, int the_version)
+  : kdata(kdat),
     name(the_name),
     version(the_version)
   {}
