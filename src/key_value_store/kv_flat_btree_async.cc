@@ -690,6 +690,8 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
 	cerr << "\t\t\t" << client_name << "-cleanup: marking " << (*it)[1]
             << " failed with " << err << std::endl;
       }
+      cout << "\t\t\t" << client_name << "-cleanup: marked " << (*it)[1]
+        << std::endl;
     }
     //restore objects that had been marked unwritable.
     for(vector<vector<string> >::const_iterator it =
@@ -717,6 +719,8 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
       if (err == -ENOENT) {
 	//it had gotten far enough to be rolled forward - unmark the objects
 	//and roll forward.
+	cout << "\t\t\t" << client_name << "-cleanup: roll forward instead"
+	    << std::endl;
 	for(vector<vector<string> >::const_iterator cit =
 	    idata.to_create.begin();
 	    cit != idata.to_create.end(); ++cit) {
@@ -725,13 +729,15 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
 	  if (interrupt() == 1 ) {
 	    return -ECANCELED;
 	  }
-	  cout << "\t\t\t" << client_name << "-cleanup: marking " << (*cit)[1]
+	  cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*cit)[1]
 	    << std::endl;
 	  err = io_ctx.operate((*cit)[1], &res);
 	  if (err < 0) {
-	    cerr << "\t\t\t" << client_name << "-cleanup: marking " << (*cit)[1]
-		<< " failed with " << err << std::endl;
+	    cerr << "\t\t\t" << client_name << "-cleanup: restoring "
+		<< (*cit)[1] << " failed with " << err << std::endl;
 	  }
+	  cout << "\t\t\t" << client_name << "-cleanup: restored " << (*cit)[1]
+	    << std::endl;
 	}
 	return cleanup(idata, -ENOENT);
       }
@@ -750,6 +756,8 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
 	return -ESUICIDE;
       }
       io_ctx.operate((*it)[1], &rm);
+      cout << "\t\t\t" << client_name << "-cleanup: removed " << (*it)[1]
+          << std::endl;
     }
     librados::ObjectWriteOperation update_index;
     update_index.omap_cmp(assertions, &err);
@@ -911,7 +919,10 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
         mytime = ceph_clock_now(g_ceph_context);
       }
       if (idata.is_timed_out(mytime)) {
-        cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+        cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	    << (mytime - idata.ts).sec()
+	    << '.' << (mytime - idata.ts).usec()
+	    << ", timeout is " << TIMEOUT << ")" << std::endl;
         //the client died after deleting the object. clean up.
         cleanup(idata, err);
       } else if (idata.prefix != "") {
@@ -964,7 +975,10 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 
   if (idata.is_timed_out(mytime)) {
     //client died before objects were deleted
-    cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+    cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	<< (mytime - idata.ts).sec()
+	<< '.' << (mytime - idata.ts).usec()
+	<< ", timeout is " << TIMEOUT << ")" << std::endl;
     cleanup(idata,-ETIMEDOUT);
   }
 
@@ -974,7 +988,10 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     return set(key, val, update_on_existing);
   }
   if (idata.is_timed_out(mytime)) {
-    cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+    cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	<< (mytime - idata.ts).sec()
+	<< '.' << (mytime - idata.ts).usec()
+	<< ", timeout is " << TIMEOUT << ")" << std::endl;
     //the client died after deleting the object. clean up.
     cleanup(idata, err);
   }
@@ -1018,10 +1035,18 @@ int KvFlatBtreeAsync::remove(const string &key) {
 	  << std::endl;
       if (err == -ENOENT) {
 	if (idata.prefix != "" && !(idata.is_timed_out(mytime))) {
+	  cout << client_name << ": prefix not timed out, so restarting. "
+	      << "( it has been "
+	      << (mytime - idata.ts).sec()
+	      << '.' << (mytime - idata.ts).usec()
+	      << ", timeout is " << TIMEOUT << ")" << std::endl;
 	  return remove(key);
 	} else if (idata.prefix != "") {
 	  //the client died after deleting the object. clean up.
-	  cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+	  cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	      << (mytime - idata.ts).sec()
+	      << '.' << (mytime - idata.ts).usec()
+	      << ", timeout is " << TIMEOUT << ")" << std::endl;
 	  cleanup(idata, err);
 	}
       } else {
@@ -1059,7 +1084,10 @@ int KvFlatBtreeAsync::remove(const string &key) {
     return remove(key);
   }
   if (idata.is_timed_out(mytime)) {
-    cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+    cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	<< (mytime - idata.ts).sec()
+	<< '.' << (mytime - idata.ts).usec()
+	<< ", timeout is " << TIMEOUT << ")" << std::endl;
     //the client died after deleting the object. clean up.
     cleanup(idata, err);
   }
@@ -1076,7 +1104,10 @@ int KvFlatBtreeAsync::remove(const string &key) {
       mytime = ceph_clock_now(g_ceph_context);
     }
     if (idata.is_timed_out(mytime)) {
-      cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+      cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+  	<< (mytime - idata.ts).sec()
+  	<< '.' << (mytime - idata.ts).usec()
+  	<< ", timeout is " << TIMEOUT << ")" << std::endl;
       //the client died after deleting the object. clean up.
       cleanup(idata, err);
       read_index(key, &idata);
@@ -1127,11 +1158,14 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   err = io_ctx.operate(obj, &read, NULL);
   if (err < 0 && err != -1 && err != -ECANCELED) {
     if (err == -ENODATA) {
-      if (mytime - idata.ts <= TIMEOUT) {
+      if (!idata.is_timed_out(mytime)) {
 	return get(key, val);
       } else {
 	//the client died after deleting the object. clean up.
-	cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
+	cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+	    << (mytime - idata.ts).sec()
+	    << '.' << (mytime - idata.ts).usec()
+	    << ", timeout is " << TIMEOUT << ")" << std::endl;
 	cleanup(idata, err);
       }
     } else {
