@@ -17,8 +17,33 @@ using std::map;
 using std::set;
 using ceph::bufferlist;
 
+class KeyValueStructure;
+
+typedef int (KeyValueStructure::*injection_t)();
+
 class KeyValueStructure{
 public:
+  /**
+   * returns 0
+   */
+  virtual int nothing() = 0;
+
+  /**
+   * Waits for a period determined by the waits vector (does not wait if waits
+   * vector is empty).
+   */
+  virtual int formal_wait() = 0;
+
+  /**
+   * 10% chance of waiting wait_ms seconds
+   */
+  virtual int wait() = 0;
+
+  /**
+   * 10% chance of killing the client.
+   */
+  virtual int suicide() = 0;
+
   ////////////////DESTRUCTOR/////////////////
   virtual ~KeyValueStructure() {};
 
@@ -33,6 +58,8 @@ public:
    * set up waitpoints for verification testing
    */
   virtual void set_waits(const vector<__useconds_t> &wait) = 0;
+
+  virtual void set_inject(injection_t inject, int wait_time) = 0;
 
   /**
    * if update_on_existing is false, returns an error if
