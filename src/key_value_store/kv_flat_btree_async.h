@@ -104,7 +104,7 @@ struct index_data {
   {}
 
   //true if there is a prefix and now - ts > timeout.
-  bool is_timed_out(utime_t now);
+  bool is_timed_out(utime_t now, utime_t timeout);
 
   //note that this does not include the key
   void encode(bufferlist &bl) const {
@@ -201,6 +201,8 @@ struct object_data {
   {}
 };
 
+class KvFlatBtreeAsync;
+
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
   int k;
@@ -209,24 +211,14 @@ protected:
   string rados_id;
   string client_name;
   int client_index;
-  char pair_init;
-  char sub_separator;
-  char pair_end;
-  char sub_terminator;
-  char terminator;
   librados::Rados rados;
   string pool_name;
+  injection_t interrupt;
   vector<__useconds_t> waits;
+  unsigned wait_ms;
   int wait_index;
-  const static int timeout_seconds = 1;
   utime_t TIMEOUT;
   friend struct index_data;
-
-  /**
-   * Waits for a period determined by the waits vector (does not wait if waits
-   * vector is empty). called before most ObjectOperations.
-   */
-  int interrupt();
 
   //These read, but do not write, librados objects
 
@@ -410,38 +402,51 @@ protected:
 
 public:
 
+  /**
+   * returns 0
+   */
+  int nothing();
+
+  /**
+   * Waits for a period determined by the waits vector (does not wait if waits
+   * vector is empty).
+   */
+  int formal_wait();
+
+  /**
+   * 10% chance of waiting wait_ms seconds
+   */
+  int wait();
+
+  /**
+   * 10% chance of killing the client.
+   */
+  int suicide();
+
 KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
     rados_id("admin"),
     client_name(string(name).append(".")),
     client_index(0),
-    pair_init('('),
-    sub_separator('|'),
-    pair_end(')'),
-    sub_terminator(';'),
-    terminator(':'),
     pool_name("data"),
-    waits(),
+    interrupt(&KeyValueStructure::nothing),
     wait_index(1),
-    TIMEOUT(2,0)
+    TIMEOUT(1,0)
   {}
 
-  KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait)
+KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
   : k(k_val),
     index_name("index_object"),
     rados_id("admin"),
     client_name(string(name).append(".")),
     client_index(0),
-    pair_init('('),
-    sub_separator('|'),
-    pair_end(')'),
-    sub_terminator(';'),
-    terminator(':'),
     pool_name("data"),
-    waits(wait),
+    interrupt(&KeyValueStructure::nothing),
+    waits(wait_vector),
+    wait_ms(1000),
     wait_index(0),
-    TIMEOUT(1000,0)
+    TIMEOUT(1,0)
   {}
 
   /**
@@ -477,6 +482,8 @@ KvFlatBtreeAsync(int k_val, string name)
    * @param wait: the array of wait times to use
    */
   void set_waits(const vector<__useconds_t> &wait);
+
+  void set_inject(injection_t inject, int wait_time);
 
   /**
    * sets up the rados and io_ctx of this KvFlatBtreeAsync. If the don't already
