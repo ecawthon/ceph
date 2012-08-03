@@ -40,10 +40,18 @@ KvStoreTest::KvStoreTest()
   ops(10),
   clients(5),
   increment(10),
-  kvs(NULL)
+  key_size(5),
+  val_size(7),
+  inject(NULL),
+  kvs(NULL),
+  rados_id("admin")
 {
   KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
   kvs = kvba;
+  probs[25] = 'i';
+  probs[50] = 'u';
+  probs[75] = 'd';
+  probs[100] = 'r';
 }
 
 int KvStoreTest::setup(int argc, const char** argv) {
@@ -55,34 +63,77 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	ops = atoi(args[i+1]);
       } else if (strcmp(args[i], "-n") == 0) {
 	entries = atoi(args[i+1]);
-      } else if (strcmp(args[i], "-k") == 0) {
+      } else if (strcmp(args[i], "--kval") == 0) {
 	k = atoi(args[i+1]);
-      } else if (strcmp(args[i], "--test") == 0) {
-/*	if(strcmp("stress",args[i+1]) == 0) {
-	  test = KvStoreTest::stress_tests;
-	}
-	else if (strcmp("function", args[i+1]) == 0) {
-	  test = KvStoreTest::functionality_tests;
-	}*/
+      } else if (strcmp(args[i], "--keysize") == 0) {
+	key_size = atoi(args[i+1]);
+      } else if (strcmp(args[i], "--valsize") == 0) {
+	val_size = atoi(args[i+1]);
       } else if (strcmp(args[i], "-t") == 0) {
 	clients = atoi(args[i+1]);
+      } else if (strcmp(args[i], "--inc") == 0) {
+	increment = atoi(args[i+1]);
+      } else if (strcmp(args[i], "--inj") == 0) {
+	if(strcmp("d",args[i+1]) == 0) {
+	  kvs->set_inject(
+	      &KeyValueStructure::suicide,
+	      wait_time);
+	}
+	else if (strcmp("w", args[i+1]) == 0) {
+	  if (args.size() - 1 > i + 1) {
+	    wait_time = atoi(args[i+2]);
+	  }
+	  kvs->set_inject(&KeyValueStructure::wait, wait_time);
+	}
+      } else if (strcmp(args[i], "-d") == 0) {
+	if (i + 3 < args.size() - 1) {
+	  cout << "Invalid arguments after -d: there must be 4 of them."
+	      << std::endl;
+	  continue;
+	} else {
+	  probs.clear();
+	  int sum = atoi(args[i + 1]);
+	  probs[sum] = 'i';
+	  sum += atoi(args[i + 2]);
+	  probs[sum] = 'u';
+	  sum += atoi(args[i + 3]);
+	  probs[sum] = 'd';
+	  sum += atoi(args[i + 4]);
+	  probs[sum] = 'r';
+	  if (sum != 100) {
+	    cout << "Invalid arguments after -d: they must add to 100."
+		<< std::endl;
+	  }
+	}
       }
+    } else if (strcmp(args[i], "--name") == 0) {
+	rados_id = args[i+1];
     } else if (strcmp(args[i], "--help") == 0) {
-      cout << "\nUsage: ostorebench [options]\n"
+      cout << "\nUsage: kvstoretest [options]\n"
 	   << "Generate latency statistics for a configurable number of "
 	   << "key value pair operations of\n"
 	   << "configurable size.\n\n"
 	   << "OPTIONS\n"
-	   << "	--ops           number of operations (default "<< ops;
-      cout << ")\n"
-	   << "	-n              number of initial pairs to write (default "
-	   << entries;
-      cout << ")\n"
-	   << "	-k              each object has k < pairs < 2k (default "
-	   << k;
-      cout << ")\n\t"
-	   << "-t              the number of clients to run at once for stress"
-	   << " test. (default " << clients << ")"
+	   << " --name                                 client name (default"
+	   << " admin\n"
+	   << "	--ops                                  number of operations "
+	   << "(default "<< ops << ")\n"
+	   << "	-n                                     number of initial pairs "
+	   <<  "to write (default " << entries << ")\n"
+	   << "	--kval                                 each object has k < "
+	   << "pairs < 2k (default " << k << ")\n"
+	   << "	--keysize                              number of characters "
+	   << "per key (default " << key_size << ")\n"
+      	   << "	--valsize                              number of characters "
+      	   << "per value (default " << val_size << ")\n"
+	   << " -t                                     the number of clients to"
+	   << " run at once for stress test. (default " << clients << ")\n"
+	   << " -i                                     type of interruption "
+	   << "(default none, 'd' for death, 'w' <time> for wait time ms \n"
+	   << "                                        (default 1000))\n"
+	   << " -d <insert> <update> <delete> <read>   distribution to use "
+	   << "(default 25-25-25-25), where <insert>, etc. are percents of"
+	   << " ops. these must add to 100.\n"
 	   << std::endl;
       exit(1);
     }
@@ -153,6 +204,18 @@ string KvStoreTest::random_string(int len) {
     ret.push_back(alphanum[rand() % (alphanum.size() - 1)]);
   }
 
+  return ret;
+}
+
+pair<string, bufferlist> KvStoreTest::rand_distr(bool new_elem) {
+  pair<string, bufferlist> ret;
+  if (new_elem) {
+    ret = make_pair(random_string(key_size),
+	KvFlatBtreeAsync::to_bl(random_string(val_size)));
+  } else {
+    ret.first = key_map[rand() % key_map.size()];
+    ret.second = KvFlatBtreeAsync::to_bl(random_string(val_size));
+  }
   return ret;
 }
 
@@ -1119,6 +1182,94 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   return err;
 }
 
+int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
+{
+  int err = 0;
+  test_random_insertions();
+  for (int i = 0; i < ops; i++) {
+    StopWatch sw;
+    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i << " / "
+	<< ops << std::endl;
+    pair<string, bufferlist> kv;
+    double random = (rand() * 100) % 100;
+    switch (probs.lower_bound(random)->second) {
+    case 'i':
+      kv = (((KvStoreTest *)this)->*distr)(true);
+      sw.start_time();
+      err = kvs->set(kv.first, kv.second, false);
+      sw.stop_time();
+      if (err < 0) {
+	cout << "Error setting " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error setting " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }
+      break;
+    case 'u':
+      kv = (((KvStoreTest *)this)->*distr)(true);
+      sw.start_time();
+      err = kvs->set(kv.first, kv.second, true);
+      sw.stop_time();
+      if (err < 0) {
+	cout << "Error updating " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error updating " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }
+      break;
+    case 'd':
+      kv = (((KvStoreTest *)this)->*distr)(true);
+      sw.start_time();
+      err = kvs->remove(kv.first);
+      sw.stop_time();
+      if (err < 0) {
+	cout << "Error removing " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error removing " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }
+      break;
+    case 'r':
+      kv = (((KvStoreTest *)this)->*distr)(true);
+      bufferlist val;
+      sw.start_time();
+      err = kvs->get(kv.first, &kv.second);
+      sw.stop_time();
+      if (err < 0) {
+	cout << "Error getting " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error getting " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }
+      break;
+    }
+
+    double time = sw.get_time();
+    sw.clear();
+    data.avg_latency = (data.avg_latency * data.completed_ops + time)
+        / (data.completed_ops + 1);
+    data.completed_ops++;
+    if (time < data.min_latency) {
+      data.min_latency = time;
+    }
+    if (time > data.max_latency) {
+      data.max_latency = time;
+    }
+    data.total_latency += time;
+    ++(data.freq_map[time / increment]);
+    if (data.freq_map[time / increment] > data.mode.second) {
+	data.mode.first = time / increment;
+      data.mode.second = data.freq_map[time / increment];
+    }
+  }
+
+  print_time_data();
+  return err;
+}
 
 int KvStoreTest::functionality_tests() {
   int err = 0;
@@ -1187,24 +1338,34 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
   return err;
 }
 
+int KvStoreTest::teuthology_tests() {
+  int err = 0;
+  test_teuthology(&KvStoreTest::rand_distr, probs);
+  return err;
+}
+
 void KvStoreTest::print_time_data() {
+  map<int, char>::iterator it = probs.begin();
   cout << "========================================================";
   cout << "\nNumber of initial entries:\t" << entries;
   cout << "\nNumber of sets of operations:\t" << ops;
   cout << "\nNumber of threads per op:\t" << clients;
   cout << "\nk:\t\t\t\t" << k;
-  cout << std::endl;
-  cout << std::endl;
+  cout << "\nprobability insertions: ." << (it++)->first;
+  cout << "\nprobability updates: ." << (it--)->first - ((it++)++)->first;
+  cout << "\nprobability deletes: ." << (it--)->first - ((it++)++)->first;
+  cout << "\nprobability reads: ." << (it--)->first - ((it++)++)->first;
+  cout << "\n";
+  cout << "\n";
   cout << "Average latency:\t" << data.avg_latency;
   cout << "ms\nMinimum latency:\t" << data.min_latency;
   cout << "ms\nMaximum latency:\t" << data.max_latency;
   cout << "ms\nMode latency:\t\t" << "between " << data.mode.first * increment;
   cout << " and " << data.mode.first * increment + increment;
   cout << "ms\nTotal latency:\t\t" << data.total_latency;
-  cout << "ms"<<std::endl;
-  cout << std::endl;
+  cout << "ms\n\n";
   //return;
-  cout << "Histogram: " << std::endl;
+/*  cout << "Histogram: " << std::endl;
   for(int i = floor(data.min_latency / increment); i <
       ceil(data.max_latency / increment); i++) {
     cout << ">= "<< i * increment << "ms";
@@ -1219,7 +1380,7 @@ void KvStoreTest::print_time_data() {
       cout << "*";
     }
     cout << std::endl;
-  }
+  }*/
   cout << "\n========================================================"
        << std::endl;
 }
@@ -1232,7 +1393,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.verification_tests(argc, argv);
+  err = kvst.teuthology_tests();
+  //err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();
