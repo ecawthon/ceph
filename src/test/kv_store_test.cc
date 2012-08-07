@@ -35,19 +35,17 @@ void StopWatch::clear() {
 
 KvStoreTest::KvStoreTest()
 : k(2),
-  wait_time(500000),
+  wait_time(100000),
   entries(30),
   ops(10),
   clients(5),
   increment(10),
   key_size(5),
   val_size(7),
-  inject(NULL),
+  inject('n'),
   kvs(NULL),
-  rados_id("admin")
+  client_name("admin")
 {
-  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, "admin");
-  kvs = kvba;
   probs[25] = 'i';
   probs[50] = 'u';
   probs[75] = 'd';
@@ -75,15 +73,13 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	increment = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inj") == 0) {
 	if(strcmp("d",args[i+1]) == 0) {
-	  kvs->set_inject(
-	      &KeyValueStructure::suicide,
-	      wait_time);
+	  inject = 's';
 	}
 	else if (strcmp("w", args[i+1]) == 0) {
 	  if (args.size() - 1 > i + 1) {
 	    wait_time = atoi(args[i+2]);
 	  }
-	  kvs->set_inject(&KeyValueStructure::wait, wait_time);
+	  inject = 'w';
 	}
       } else if (strcmp(args[i], "-d") == 0) {
 	if (i + 3 < args.size() - 1) {
@@ -105,9 +101,9 @@ int KvStoreTest::setup(int argc, const char** argv) {
 		<< std::endl;
 	  }
 	}
+      } else if (strcmp(args[i], "--name") == 0) {
+	client_name = args[i+1];
       }
-    } else if (strcmp(args[i], "--name") == 0) {
-	rados_id = args[i+1];
     } else if (strcmp(args[i], "--help") == 0) {
       cout << "\nUsage: kvstoretest [options]\n"
 	   << "Generate latency statistics for a configurable number of "
@@ -138,6 +134,21 @@ int KvStoreTest::setup(int argc, const char** argv) {
       exit(1);
     }
   }
+
+  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, client_name);
+  kvs = kvba;
+  switch (inject) {
+  case 'w':
+    kvs->set_inject(&KeyValueStructure::wait, wait_time);
+    break;
+  case 's':
+    kvs->set_inject(&KeyValueStructure::suicide, wait_time);
+    break;
+  default:
+    kvs->set_inject(&KeyValueStructure::nothing, wait_time);
+    break;
+  }
+
 
   librados::Rados rados;
   string rados_id("admin");
@@ -175,18 +186,22 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
+/*
   librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
   }
+*/
 
   r = kvs->setup(argc, argv);
-  if (r < 0) {
+  if (r < 0 && r != -17) {
     cout << "error during setup of kvs: " << r << std::endl;
     return r;
   }
+
+  srand(time(NULL));
 
   return 0;
 }
@@ -652,10 +667,10 @@ int KvStoreTest::test_random_insertions() {
 	  << std::endl;
       return err;
     }
-    if (!kvs->is_consistent()) {
+/*    if (!kvs->is_consistent()) {
       cout << "Random insertions failed - not consistent" << std::endl;
       return -EINCONSIST;
-    }
+    }*/
   }
   cout << "random insertions successful" << std::endl;
 
@@ -903,8 +918,6 @@ int KvStoreTest::test_verify_random_set_rms(int argc, const char** argv) {
     kvbas[i] = new KvFlatBtreeAsync(2, name, wait);
     kvbas[i]->setup(argc, argv);
   }
-
-  srand(time(NULL));
 
   for (int i = 0; i < 10; i++) {
     cout << i << std::endl;
@@ -1186,25 +1199,29 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
 {
   int err = 0;
   test_random_insertions();
+  vector<kv_bench_datum> datums;
   for (int i = 0; i < ops; i++) {
     StopWatch sw;
-    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i << " / "
+    kv_bench_datum d;
+    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i + 1 << " / "
 	<< ops << std::endl;
     pair<string, bufferlist> kv;
-    double random = (rand() * 100) % 100;
-    switch (probs.lower_bound(random)->second) {
+    int random = (rand() % 100);
+    cout << random << std::endl;
+    d.op = probs.lower_bound(random)->second;
+    switch (d.op) {
     case 'i':
       kv = (((KvStoreTest *)this)->*distr)(true);
       sw.start_time();
       err = kvs->set(kv.first, kv.second, false);
       sw.stop_time();
-      if (err < 0) {
+      if (err < 0 && err != -17) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error setting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'u':
       kv = (((KvStoreTest *)this)->*distr)(true);
@@ -1214,10 +1231,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'd':
       kv = (((KvStoreTest *)this)->*distr)(true);
@@ -1227,10 +1244,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'r':
       kv = (((KvStoreTest *)this)->*distr)(true);
@@ -1241,15 +1258,17 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     }
 
     double time = sw.get_time();
     sw.clear();
+    d.latency = time;
+    datums.push_back(d);
     data.avg_latency = (data.avg_latency * data.completed_ops + time)
         / (data.completed_ops + 1);
     data.completed_ops++;
@@ -1265,6 +1284,11 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
 	data.mode.first = time / increment;
       data.mode.second = data.freq_map[time / increment];
     }
+  }
+
+  for(vector<kv_bench_datum>::iterator it = datums.begin(); it != datums.end();
+      ++it) {
+    print_time_datum(&cout, *it);
   }
 
   print_time_data();
@@ -1344,6 +1368,15 @@ int KvStoreTest::teuthology_tests() {
   return err;
 }
 
+void KvStoreTest::print_time_datum(ostream * s, kv_bench_datum d) {
+  (*s) << d.op;
+  if (d.op == 'i') cout << "\t";
+  if (d.op == 'd') cout << "\t\t";
+  if (d.op == 'r') cout << "\t\t\t";
+  if (d.op == 'u') cout << "\t\t\t\t";
+  cout << "\t" << d.latency << std::endl;
+}
+
 void KvStoreTest::print_time_data() {
   map<int, char>::iterator it = probs.begin();
   cout << "========================================================";
@@ -1363,9 +1396,9 @@ void KvStoreTest::print_time_data() {
   cout << "ms\nMode latency:\t\t" << "between " << data.mode.first * increment;
   cout << " and " << data.mode.first * increment + increment;
   cout << "ms\nTotal latency:\t\t" << data.total_latency;
-  cout << "ms\n\n";
+  cout << "ms\n";
   //return;
-/*  cout << "Histogram: " << std::endl;
+/*  cout << "\nHistogram: " << std::endl;
   for(int i = floor(data.min_latency / increment); i <
       ceil(data.max_latency / increment); i++) {
     cout << ">= "<< i * increment << "ms";
@@ -1381,7 +1414,7 @@ void KvStoreTest::print_time_data() {
     }
     cout << std::endl;
   }*/
-  cout << "\n========================================================"
+  cout << "========================================================"
        << std::endl;
 }
 
