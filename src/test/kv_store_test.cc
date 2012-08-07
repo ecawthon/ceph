@@ -186,14 +186,14 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
-/*
+
   librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
   }
-*/
+
 
   r = kvs->setup(argc, argv);
   if (r < 0 && r != -17) {
