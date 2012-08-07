@@ -258,7 +258,8 @@ protected:
    * @post: idata contains complete information
    * stored
    */
-  int read_index(const string &key, index_data * idata);
+  int read_index(const string &key, index_data * idata,
+      index_data * next_idata);
 
   //These sometimes modify objects and the index
 
@@ -289,8 +290,8 @@ protected:
    * -ECANCELED if the rebalance fails due to another thread (meaning rebalance
    * should be repeated)
    */
-  int rebalance(const index_data &idata1, object_data * odata1,
-      bool reverse);
+  int rebalance(const index_data &idata1,
+      const index_data &next_idata, const object_data &odata1);
 
   /**
    * performs an ObjectReadOperation to populate odata
