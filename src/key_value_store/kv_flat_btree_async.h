@@ -104,7 +104,7 @@ struct index_data {
   {}
 
   //true if there is a prefix and now - ts > timeout.
-  bool is_timed_out(utime_t now, utime_t timeout);
+  bool is_timed_out(utime_t now, utime_t timeout) const;
 
   //note that this does not include the key
   void encode(bufferlist &bl) const {
@@ -426,7 +426,7 @@ public:
 KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
-    rados_id("admin"),
+    rados_id(name),
     client_name(string(name).append(".")),
     client_index(0),
     pool_name("data"),
@@ -438,7 +438,7 @@ KvFlatBtreeAsync(int k_val, string name)
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
   : k(k_val),
     index_name("index_object"),
-    rados_id("admin"),
+    rados_id(name),
     client_name(string(name).append(".")),
     client_index(0),
     pool_name("data"),

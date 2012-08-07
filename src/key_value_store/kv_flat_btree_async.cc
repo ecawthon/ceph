@@ -29,7 +29,7 @@
 using namespace std;
 using ceph::bufferlist;
 
-bool index_data::is_timed_out(utime_t now, utime_t timeout) {
+bool index_data::is_timed_out(utime_t now, utime_t timeout) const {
   return prefix != "" && now - ts > timeout;
 }
 
@@ -77,8 +77,7 @@ int KvFlatBtreeAsync::next(const index_data &idata, index_data * out_data) {
     out_data->kdata.parse(kvs.begin()->first);
     bufferlist::iterator b = kvs.begin()->second.begin();
     out_data->decode(b);
-    if (idata.prefix != "" && ceph_clock_now(g_ceph_context)
-	- idata.ts > TIMEOUT) {
+    if (idata.is_timed_out(ceph_clock_now(g_ceph_context),TIMEOUT)) {
       cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
       //the client died after deleting the object. clean up.
       cleanup(idata, err);
@@ -118,7 +117,7 @@ int KvFlatBtreeAsync::prev(const index_data &idata, index_data * out_data) {
   out_data->kdata.parse(it->first);
   bufferlist::iterator b = it->second.begin();
   out_data->decode(b);
-  if (idata.prefix != "" && ceph_clock_now(g_ceph_context) - idata.ts > TIMEOUT)
+  if (idata.is_timed_out(ceph_clock_now(g_ceph_context),TIMEOUT))
   {
     cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
     //the client died after deleting the object. clean up.
@@ -143,6 +142,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata) {
   if (err < 0){
     cout << "\t" << client_name << "-read_index: getting keys failed with "
 	<< err << std::endl;
+    assert(false);
     return err;
   }
   if (dupmap.size() > 0) {
@@ -880,7 +880,6 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   if (r < 0) {
     cerr << client_name << ": Making the index failed with code " << r
 	<< std::endl;
-    return r;
   }
 
   librados::ObjectWriteOperation make_max_obj;
@@ -888,7 +887,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   make_max_obj.setxattr("unwritable", to_bl("0"));
   r = io_ctx.operate(client_name, &make_max_obj);
 
-  return r;
+  return 0;
 
 }
 
@@ -930,7 +929,9 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
         mytime = ceph_clock_now(g_ceph_context);
       }
       if (idata.is_timed_out(mytime, TIMEOUT)) {
-        cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
+        cout << client_name << " THINKS THE OTHER CLIENT DIED. (mytime is "
+            << mytime.sec() << "." << mytime.usec() << ", idata.ts is "
+            << idata.ts.sec() << "." << idata.ts.usec() << ", it has been "
 	    << (mytime - idata.ts).sec()
 	    << '.' << (mytime - idata.ts).usec()
 	    << ", timeout is " << TIMEOUT << ")" << std::endl;
@@ -1130,6 +1131,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
 	  << ", timeout is " << TIMEOUT <<")" << std::endl;
     }
   } while (!(err == -1 || err == -ENOENT || err == 0));
+  err = 0;
   return err;
 }
 
@@ -1168,7 +1170,7 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   }
   err = io_ctx.operate(obj, &read, NULL);
   if (err < 0 && err != -1 && err != -ECANCELED) {
-    if (err == -ENODATA) {
+    if (err == -ENOENT) {
       if (!idata.is_timed_out(mytime, TIMEOUT)) {
 	return get(key, val);
       } else {
@@ -1180,7 +1182,8 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
 	cleanup(idata, err);
       }
     } else {
-      cerr << "split encountered an unexpected error: " << err << std::endl;
+      cerr << client_name << ": get encountered an unexpected error: " << err
+	  << std::endl;
       return err;
     }
   }
