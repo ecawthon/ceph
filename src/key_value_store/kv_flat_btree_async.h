@@ -272,7 +272,7 @@ protected:
    * @post: odata has complete information
    * @return -1 if obj does not need to be split,
    */
-  int split(const index_data &idata, object_data *odata);
+  int split(const index_data &idata, const object_data odata);
 
   /**
    * reads o1 and the next object after o1 and, if necessary, rebalances them.
@@ -427,7 +427,7 @@ public:
 KvFlatBtreeAsync(int k_val, string name)
   : k(k_val),
     index_name("index_object"),
-    rados_id(name),
+    rados_id("admin"),
     client_name(string(name).append(".")),
     client_index(0),
     pool_name("data"),
@@ -496,6 +496,8 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
         bool update_on_existing);
 
   int remove(const string &key);
+
+//  int set_many(const map<string, bufferlist> kvmap, bool update_on_existing);
 
   /**
    * returns true if all of the following are true:
