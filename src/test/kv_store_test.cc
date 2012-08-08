@@ -149,7 +149,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
     break;
   }
 
-/*
+
   librados::Rados rados;
   string rados_id("admin");
   string pool_name("data");
@@ -194,7 +194,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
     io_ctx.operate(it->first, &rm);
   }
 
-*/
+
   int err = kvs->setup(argc, argv);
   if (err < 0 && err != -17) {
     cout << "error during setup of kvs: " << err << std::endl;
@@ -658,6 +658,8 @@ int KvStoreTest::test_random_insertions() {
     }
   cout << "testing random insertions";
   for (int i = 0; i < entries; i++) {
+    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tinitial:" << i + 1
+	<< " / " << entries << std::endl;
     cout << ".";
     cout.flush();
     pair<string,bufferlist> this_pair = map_vector[i];
@@ -1083,8 +1085,12 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	cout << "error joining first pthread: " << err << std::endl;
 	return err;
     }
-    delete kvbas[i];
+    if (i != 9) {
+      delete kvbas[i];
+    }
   }
+  assert(kvbas[9]->is_consistent());
+  delete kvbas[9];
 
   //setup kvs
   for(int i = 0; i < clients; i++) {
@@ -1183,11 +1189,14 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
         data.mode.second = data.freq_map[time / increment];
       }
     }
+    if (!kvs->is_consistent()) {
+      return -EINCONSIST;
+    }
   }
   for (int j = 0; j < clients; j++) {
-    if (j == clients - 1) {
+/*    if (j == clients - 1) {
       cout << kvs->str();
-    }
+    }*/
     delete kvs_arr[j];
   }
 
@@ -1426,8 +1435,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.teuthology_tests();
-  //err = kvst.verification_tests(argc, argv);
+  //err = kvst.teuthology_tests();
+  err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();
