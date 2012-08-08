@@ -149,7 +149,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
     break;
   }
 
-
+/*
   librados::Rados rados;
   string rados_id("admin");
   string pool_name("data");
@@ -194,11 +194,11 @@ int KvStoreTest::setup(int argc, const char** argv) {
     io_ctx.operate(it->first, &rm);
   }
 
-
-  r = kvs->setup(argc, argv);
-  if (r < 0 && r != -17) {
-    cout << "error during setup of kvs: " << r << std::endl;
-    return r;
+*/
+  int err = kvs->setup(argc, argv);
+  if (err < 0 && err != -17) {
+    cout << "error during setup of kvs: " << err << std::endl;
+    return err;
   }
 
   srand(time(NULL));

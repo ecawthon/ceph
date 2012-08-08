@@ -1021,56 +1021,27 @@ int KvFlatBtreeAsync::remove(const string &key) {
   index_data idata;
   index_data next_idata;
 
-  //while (err != -1) {
-    if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
-      return -ESUICIDE;
-    }
-    cout << "\t" << client_name << ": finding oid" << std::endl;
-    err = read_index(key, &idata, &next_idata);
-    mytime = ceph_clock_now(g_ceph_context);
-    if (err < 0) {
-      cerr << "getting oid failed with code " << err << std::endl;
-      return err;
-    }
-    obj = idata.obj;
-    cout << "\t" << client_name << ": idata is " << idata.str() << std::endl;
-    cout << "\t" << client_name << ": next_idata is "
-	<< next_idata.str() << std::endl;
-    cout << "\t" << client_name << ": obj is " << obj << std::endl;
-    cout << "\t" << client_name << ": rebalancing " << obj << std::endl;
-    err = read_object(obj, &odata);
-    if (err < 0) {
-      cerr << "\t" << client_name << ": read object returned " << err
-	  << std::endl;
-      if (err == -ENOENT && idata.prefix != "") {
-	if (idata.is_timed_out(mytime, TIMEOUT)) {
-	  //the client died after deleting the object. clean up.
-	  cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
-	      << (mytime - idata.ts).sec()
-	      << '.' << (mytime - idata.ts).usec()
-	      << ", timeout is " << TIMEOUT << ")" << std::endl;
-	  cleanup(idata, err);
-	  return remove(key);
-	} else {
-	  cout << client_name << ": prefix not timed out, so restarting. "
-	      << "( it has been "
-	      << (mytime - idata.ts).sec()
-	      << '.' << (mytime - idata.ts).usec()
-	      << ", timeout is " << TIMEOUT << ")" << std::endl;
-	  return remove(key);
-	}
-      } else {
-	cerr << "read object encountered an unexpected error: "
-	    << err << std::endl;
-	return err;
-      }
-    }
-
-    err = rebalance(idata, next_idata, odata);
-    //errors other than -1 will only occur if the object did need to be
-    //rebalanced, and since we guarantee that no object will be more than 1
-    //below k, we retry
-    if (err == -ECANCELED || err == -EPREFIX) {
+  if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
+    return -ESUICIDE;
+  }
+  cout << "\t" << client_name << ": finding oid" << std::endl;
+  err = read_index(key, &idata, &next_idata);
+  mytime = ceph_clock_now(g_ceph_context);
+  if (err < 0) {
+    cerr << "getting oid failed with code " << err << std::endl;
+    return err;
+  }
+  obj = idata.obj;
+  cout << "\t" << client_name << ": idata is " << idata.str() << std::endl;
+  cout << "\t" << client_name << ": next_idata is "
+      << next_idata.str() << std::endl;
+  cout << "\t" << client_name << ": obj is " << obj << std::endl;
+  cout << "\t" << client_name << ": rebalancing " << obj << std::endl;
+  err = read_object(obj, &odata);
+  if (err < 0) {
+    cerr << "\t" << client_name << ": read object returned " << err
+	<< std::endl;
+    if (err == -ENOENT && idata.prefix != "") {
       if (idata.is_timed_out(mytime, TIMEOUT)) {
 	//the client died after deleting the object. clean up.
 	cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
@@ -1087,11 +1058,12 @@ int KvFlatBtreeAsync::remove(const string &key) {
 	    << ", timeout is " << TIMEOUT << ")" << std::endl;
 	return remove(key);
       }
-    } else if (err != -1) {
-      cout << "rebalance encountered an unexpected error: " << err
-	  << std::endl;
+    } else {
+      cerr << "read object encountered an unexpected error: "
+	  << err << std::endl;
       return err;
     }
+  }
 
   //write
   librados::ObjectWriteOperation owo;
@@ -1139,6 +1111,11 @@ int KvFlatBtreeAsync::remove(const string &key) {
       //ops to clean it up if it did, and the chances of it starting and timing
       //out over the course of this remove are very low.
       break;
+    } else if (idata.prefix != "") {
+      mytime = ceph_clock_now(g_ceph_context);
+    } else if (idata.prefix == "" && err == -EPREFIX) {
+      read_index(key, &idata, &next_idata);
+      mytime = ceph_clock_now(g_ceph_context);
     }
 
     if (idata.is_timed_out(mytime, TIMEOUT)) {
@@ -1159,7 +1136,6 @@ int KvFlatBtreeAsync::remove(const string &key) {
 	  << "so restarting ( it has been " << (mytime - idata.ts).sec()
 	  << '.' << (mytime - idata.ts).usec()
 	  << ", timeout is " << TIMEOUT <<")" << std::endl;
-      mytime = ceph_clock_now(g_ceph_context);
     }
   } while (!(err == -1 || err == -ENOENT || err == 0));
   return 0;
