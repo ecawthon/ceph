@@ -15,8 +15,11 @@
 #include "include/utime.h"
 #include "include/rados.h"
 #include "include/encoding.h"
+#include "common/Mutex.h"
+#include "common/Cond.h"
 #include <sstream>
 #include <stdarg.h>
+#include <queue>
 
 using namespace std;
 using ceph::bufferlist;
@@ -201,7 +204,41 @@ struct object_data {
   {}
 };
 
-class KvFlatBtreeAsync;
+struct balance_op {
+  index_data idata1;
+  index_data idata2;
+  object_data odata;
+  int err;
+
+  balance_op()
+  {}
+
+  balance_op(index_data i, object_data o)
+  : idata1(i),
+    odata(o)
+  {}
+
+  balance_op(index_data i1, index_data i2)
+  : idata1(i1),
+    idata2(i2)
+  {}
+
+  balance_op(index_data i, int e)
+  : idata1(i),
+    err(e)
+  {}
+
+};
+
+namespace std {
+  template<> struct less<balance_op> {
+    bool operator() (const balance_op& b1, const balance_op& b2) const {
+	  return b1.err < b2.err;
+    }
+  };
+}
+
+class BalanceQueue;
 
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
@@ -218,7 +255,13 @@ protected:
   unsigned wait_ms;
   int wait_index;
   utime_t TIMEOUT;
+  pthread_t balance_thread;
+  BalanceQueue * bq;
+
+  Mutex bal_death_lock;
+  bool bal_death;
   friend struct index_data;
+  friend class BalanceQueue;
 
   //These read, but do not write, librados objects
 
@@ -272,7 +315,7 @@ protected:
    * @post: odata has complete information
    * @return -1 if obj does not need to be split,
    */
-  int split(const index_data &idata, const object_data odata);
+  int split(const index_data &idata, const object_data &odata);
 
   /**
    * reads o1 and the next object after o1 and, if necessary, rebalances them.
@@ -291,7 +334,9 @@ protected:
    * should be repeated)
    */
   int rebalance(const index_data &idata1,
-      const index_data &next_idata, const object_data &odata1);
+      const index_data &next_idata);
+
+  static void* balancer(void *ptr);
 
   /**
    * performs an ObjectReadOperation to populate odata
@@ -433,7 +478,8 @@ KvFlatBtreeAsync(int k_val, string name)
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     wait_index(1),
-    TIMEOUT(1,0)
+    TIMEOUT(1,0),
+    bal_death_lock("Balance thread death lock")
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -447,8 +493,11 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     waits(wait_vector),
     wait_ms(1000),
     wait_index(0),
-    TIMEOUT(1,0)
+    TIMEOUT(1,0),
+    bal_death_lock("Balance thread death lock")
   {}
+
+~KvFlatBtreeAsync();
 
   /**
    * creates a string with an int at the end.
@@ -529,6 +578,26 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
 
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 
+};
+
+class BalanceQueue {
+protected:
+  int queue_size;
+  Cond queue_not_full;
+  Mutex bal_lock;
+  int max_queue_size;
+  std::queue<balance_op> bal_q;
+  std::set<balance_op> bal_set;
+
+public:
+  BalanceQueue()
+  : bal_lock("BalanceQueue::bal_lock"),
+    max_queue_size(5)
+  {}
+
+  int push(balance_op op);
+
+  int pop(KvFlatBtreeAsync * kvba);
 };
 
 #endif /* KVFLATBTREEASYNC_H_ */

@@ -1165,8 +1165,9 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	suicide_watch.start_time();
       } else if (j == clients - 1) {
 	suicide_watch.stop_time();
+	sleep(1000);
 	cout << "checking consistency" << std::endl;
-	if (suicide_watch.get_time() < utime_t(0,2000)
+	if (suicide_watch.get_time() < utime_t(0,1000)
 	    && !kvs->is_consistent()) {
 	  return -EINCONSIST;
 	}
@@ -1436,8 +1437,8 @@ int main(int argc, const char** argv) {
     return err;
   }
   //err = kvst.teuthology_tests();
-  err = kvst.verification_tests(argc, argv);
-  //err = kvst.functionality_tests();
+  //err = kvst.verification_tests(argc, argv);
+  err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();
   return 0;
