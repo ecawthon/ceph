@@ -55,6 +55,7 @@ KvStoreTest::KvStoreTest()
 int KvStoreTest::setup(int argc, const char** argv) {
   vector<const char*> args;
   argv_to_vec(argc,argv,args);
+  srand(time(NULL));
   for (unsigned i = 0; i < args.size(); i++) {
     if(i < args.size() - 1) {
       if (strcmp(args[i], "--ops") == 0) {
@@ -103,6 +104,8 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	}
       } else if (strcmp(args[i], "--name") == 0) {
 	client_name = args[i+1];
+      } else if (strcmp(args[i], "-r") == 0) {
+	srand(atoi(args[i+1]));
       }
     } else if (strcmp(args[i], "--help") == 0) {
       cout << "\nUsage: kvstoretest [options]\n"
@@ -130,12 +133,13 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	   << " -d <insert> <update> <delete> <read>   distribution to use "
 	   << "(default 25-25-25-25), where <insert>, etc. are percents of"
 	   << " ops. these must add to 100.\n"
+	   << " -r <seed>                              random seed to use\n"
 	   << std::endl;
       exit(1);
     }
   }
 
-  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, client_name);
+  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, client_name, clients);
   kvs = kvba;
   switch (inject) {
   case 'w':
@@ -187,12 +191,12 @@ int KvStoreTest::setup(int argc, const char** argv) {
   }
 
 
-  librados::ObjectIterator it;
+/*  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
-  }
+  }*/
 
 
   int err = kvs->setup(argc, argv);
@@ -200,8 +204,6 @@ int KvStoreTest::setup(int argc, const char** argv) {
     cout << "error during setup of kvs: " << err << std::endl;
     return err;
   }
-
-  srand(time(NULL));
 
   return 0;
 }
@@ -227,8 +229,18 @@ pair<string, bufferlist> KvStoreTest::rand_distr(bool new_elem) {
   if (new_elem) {
     ret = make_pair(random_string(key_size),
 	KvFlatBtreeAsync::to_bl(random_string(val_size)));
+    key_map.insert(ret.first);
   } else {
-    ret.first = key_map[rand() % key_map.size()];
+    if (key_map.size() == 0) {
+      return make_pair("",KvFlatBtreeAsync::to_bl(""));
+    }
+    string get_string = random_string(key_size);
+    std::set<string>::iterator it = key_map.lower_bound(get_string);
+    if (it == key_map.end()) {
+      ret.first = *(key_map.rbegin());
+    } else {
+      ret.first = *it;
+    }
     ret.second = KvFlatBtreeAsync::to_bl(random_string(val_size));
   }
   return ret;
@@ -1052,11 +1064,9 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   for(int i = 0; i < 10; i++) {
     string name = KvFlatBtreeAsync::to_string("prados",i);
     cout << "name is " << name << std::endl;
-    kvbas[i] = new KvFlatBtreeAsync(2, name);
+    kvbas[i] = new KvFlatBtreeAsync(2, name, clients);
     kvbas[i]->setup(argc, argv);
   }
-
-  srand(time(NULL));
 
   for (int i = 0; i < 10; i++) {
     cout << i << std::endl;
@@ -1094,7 +1104,8 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 
   //setup kvs
   for(int i = 0; i < clients; i++) {
-    kvs_arr[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i));
+    kvs_arr[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i)
+    , clients);
     err = kvs_arr[i]->setup(argc, argv);
     if (err < 0 && err != -17) {
       cout << "error setting up client " << i << ": " << err << std::endl;
@@ -1221,56 +1232,69 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
     switch (d.op) {
     case 'i':
       kv = (((KvStoreTest *)this)->*distr)(true);
-      sw.start_time();
-      err = kvs->set(kv.first, kv.second, false);
-      sw.stop_time();
-      if (err < 0 && err != -17) {
-	cout << "Error setting " << kv << ": " << err << std::endl;
-	return err;
-      } /*else if (!kvs->is_consistent()) {
-	cout << "Error setting " << kv << ": not consistent!" << std::endl;
-	return -EINCONSIST;
-      }*/
-      break;
-    case 'u':
-      kv = (((KvStoreTest *)this)->*distr)(true);
+      if (kv.first == "") {
+	continue;
+      }
       sw.start_time();
       err = kvs->set(kv.first, kv.second, true);
       sw.stop_time();
       if (err < 0) {
+	cout << "Error setting " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error setting " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }
+      break;
+    case 'u':
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	continue;
+      }
+      sw.start_time();
+      err = kvs->set(kv.first, kv.second, true);
+      sw.stop_time();
+      if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     case 'd':
-      kv = (((KvStoreTest *)this)->*distr)(true);
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	continue;
+      }
+      key_map.erase(kv.first);
       sw.start_time();
       err = kvs->remove(kv.first);
       sw.stop_time();
-      if (err < 0) {
+      if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     case 'r':
-      kv = (((KvStoreTest *)this)->*distr)(true);
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	continue;
+      }
       bufferlist val;
       sw.start_time();
       err = kvs->get(kv.first, &kv.second);
       sw.stop_time();
-      if (err < 0) {
+      if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     }
 
@@ -1435,8 +1459,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  //err = kvst.teuthology_tests();
-  err = kvst.verification_tests(argc, argv);
+  err = kvst.teuthology_tests();
+  //err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();
