@@ -218,6 +218,7 @@ protected:
   unsigned wait_ms;
   int wait_index;
   utime_t TIMEOUT;
+  int margin;
   friend struct index_data;
 
   //These read, but do not write, librados objects
@@ -424,16 +425,17 @@ public:
    */
   int suicide();
 
-KvFlatBtreeAsync(int k_val, string name)
+KvFlatBtreeAsync(int k_val, string name, int marg)
   : k(k_val),
     index_name("index_object"),
-    rados_id("admin"),
+    rados_id(name),
     client_name(string(name).append(".")),
     client_index(0),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     wait_index(1),
-    TIMEOUT(1,0)
+    TIMEOUT(1,0),
+    margin(marg)
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)

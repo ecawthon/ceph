@@ -80,7 +80,7 @@ protected:
   int key_size;
   int val_size;
   map<int, char> probs;
-  vector<string> key_map;
+  set<string> key_map;
   kv_bench_data data;
   char inject;
   KeyValueStructure * kvs;

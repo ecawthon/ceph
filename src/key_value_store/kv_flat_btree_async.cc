@@ -913,7 +913,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   index_data idata(key);
   object_data odata;
 
-  while (err != -1) {
+  do {
     cout << "\t" << client_name << ": finding oid" << std::endl;
     err = read_index(key, &idata, NULL);
     mytime = ceph_clock_now(g_ceph_context);
@@ -926,24 +926,19 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 	<< std::endl;
     obj = idata.obj;
 
-    cout << "\t" << client_name << ": obj is " << obj << std::endl;
     cout << "\t" << client_name << ": reading " << idata.obj << std::endl;
     err = read_object(idata.obj, &odata);
     odata.kdata = idata.kdata;
     cout << "\t" << client_name << ": size of " << idata.obj << " is "
         << odata.size << ", version is " << odata.version << std::endl;
     if (odata.omap.count(key) == 1){
-      err = -1;
       if (!update_on_existing){
 	cout << "\t" << client_name << ": key exists, so returning "
 	    << std::endl;
 	return -EEXIST;
       }
-    } else if (err == 0) {
-      cout << "\t" << client_name << ": running split on " << obj << std::endl;
-      err = split(idata, odata);
     }
-    if (err < -1) {
+    if (err < 0) {
       cerr << "\t" << client_name << ": split returned " << err << std::endl;
       if (idata.prefix == "" && err == -EPREFIX) {
         read_index(key, &idata, NULL);
@@ -966,21 +961,18 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
       } else if (err != -1 && err != -ECANCELED && err != -ENOENT
 	  && err != -EPREFIX){
 	cerr << "\t" << client_name
-	    << ": split encountered an unexpected error: " << err << std::endl;
+	    << ": read encountered an unexpected error: " << err << std::endl;
 	return err;
       }
-      if (err != -1 && wait_index >= 3) {
-	wait_index -= 3;
-      }
     }
-  }
+  } while(err != 0);
 
   cout << "\t" << client_name << ": got our object: " << obj << std::endl;
 
   //write
   librados::ObjectWriteOperation owo;
   librados::AioCompletion * write_aioc = rados.aio_create_completion();
-  owo.assert_version(odata.version);
+  //owo.assert_version(odata.version);
   owo.cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("0"));
   map<std::string,bufferlist> to_insert;
   to_insert[key] = val;
@@ -1000,6 +992,57 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   }
   cout << "\t" << client_name << ": write finished with " << err << std::endl;
 
+  do {
+    cout << "\t" << client_name << ": running split on " << obj << std::endl;
+    odata.omap.insert(make_pair(key, val));
+    if (odata.omap.count(key) == 0) {
+      odata.size++;
+      odata.version = write_aioc->get_version();
+    }
+    err = split(idata, odata);
+    if (err < -1) {
+      cerr << "\t" << client_name << ": split returned " << err << std::endl;
+      if (err == -ESUICIDE) {
+	cout << client_name << " IS SUICIDING!" << std::endl;
+	return err;
+      } else if (err == -ECANCELED || err == -EPREFIX || err == -ERANGE) {
+	if (read_index(key, &idata, NULL) == -ESUICIDE) {
+	  cout << client_name << " IS SUICIDING!" << std::endl;
+	  return err;
+	}
+	cout << "\t" << client_name << ": prefix is " << idata.str()
+	    << std::endl;
+	if (idata.obj != odata.name) {
+	  err = 0;
+	}
+	if (err == -ERANGE) {
+	  read_object(idata.obj, &odata);
+	}
+	mytime = ceph_clock_now(g_ceph_context);
+      }
+      if (idata.is_timed_out(mytime, TIMEOUT)) {
+	cout << client_name << " THINKS THE OTHER CLIENT DIED. (mytime is "
+	    << mytime.sec() << "." << mytime.usec() << ", idata.ts is "
+	    << idata.ts.sec() << "." << idata.ts.usec() << ", it has been "
+	      << (mytime - idata.ts).sec()
+	      << '.' << (mytime - idata.ts).usec()
+	      << ", timeout is " << TIMEOUT << ")" << std::endl;
+	//the client died after deleting the object. clean up.
+	cleanup(idata, err);
+      } else if (idata.prefix != "") {
+	cout << "\t" << client_name << ": prefix and not timed out, "
+	    << "so restarting ( it has been " << (mytime - idata.ts).sec()
+	    << '.' << (mytime - idata.ts).usec()
+	    << ", timeout is " << TIMEOUT << ")" << std::endl;
+	mytime = ceph_clock_now(g_ceph_context);
+      } else if (err != -1 && err != -ECANCELED && err != -ENOENT
+	    && err != -EPREFIX && err != -ERANGE){
+	  cerr << "\t" << client_name
+	      << ": split encountered an unexpected error: " << err << std::endl;
+	  return err;
+      }
+    }
+  } while (err < -1 );
   if (idata.is_timed_out(mytime, TIMEOUT)) {
     //client died before objects were deleted
     cout << client_name << " THINKS THE OTHER CLIENT DIED. ( it has been "
@@ -1071,7 +1114,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
   //write
   librados::ObjectWriteOperation owo;
   librados::AioCompletion * write_aioc = rados.aio_create_completion();
-  owo.assert_version(odata.version);
+  //owo.assert_version(odata.version);
   owo.cmpxattr("unwritable", CEPH_OSD_CMPXATTR_OP_EQ, to_bl("0"));
   std::set<std::string> to_rm;
   to_rm.insert(key);
@@ -1158,7 +1201,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
 	  err = 1;
 	}
       }
-    }while (!(err == -1 || err == 0 || err == -ENOENT));
+    } while (!(err == -1 || err == 0 || err == -ENOENT));
   }
 
   if (idata.is_timed_out(mytime, TIMEOUT)) {
@@ -1430,7 +1473,7 @@ bool KvFlatBtreeAsync::is_consistent() {
 
     //check that size is in the right range
     if (it->first != "1" &&
-	(size_int > 2*k || size_int < k) && parsed_index.size() > 1) {
+	(size_int > 2*k + margin|| size_int < k - margin) && parsed_index.size() > 1) {
       cout << "Not consistent! Object " << *it << " has size " << size_int
 	  << ", which is outside the acceptable range." << std::endl;
       ret = false;
