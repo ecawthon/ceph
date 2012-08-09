@@ -381,7 +381,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   for (int i = 1; i < 6; i++) {
     ops.push_back(make_pair(make_pair(0,""), &other_ops[i]));
   }
-  
+
   index_data out_data;
   set_up_prefix_index(to_create, to_delete, &other_ops[0], &out_data, &err);
   set_up_ops(to_create, to_delete, &ops, out_data, &err);
@@ -1267,6 +1267,7 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
 	    << '.' << (mytime - idata.ts).usec()
 	    << ", timeout is " << TIMEOUT << ")" << std::endl;
 	cleanup(idata, err);
+	return get(key, val);
       }
     } else {
       cerr << client_name << ": get encountered an unexpected error: " << err
