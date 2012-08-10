@@ -33,6 +33,10 @@ bool index_data::is_timed_out(utime_t now, utime_t timeout) const {
   return prefix != "" && now - ts > timeout;
 }
 
+bool index_data::is_timed_out(utime_t timeout) const {
+  return is_timed_out(ceph_clock_now(g_ceph_context), timeout);
+}
+
 int KvFlatBtreeAsync::nothing() {
   return 0;
 }
@@ -130,11 +134,16 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     index_data * next_idata) {
   cout << "\t" << client_name << "-read_index: getting index_data for " << key
       << std::endl;
+  assert (key != "" || idata->kdata.prefix != "");
+  std::set<std::string> key_set;
+  if (idata->kdata.prefix == "1") {
+    key_set.insert(idata->kdata.encoded());
+  } else {
+    key_set.insert(key_data(key).encoded());
+  }
   librados::ObjectReadOperation oro;
   bufferlist raw_val;
   int err = 0;
-  std::set<std::string> key_set;
-  key_set.insert(key_data(key).encoded());
   std::map<std::string, bufferlist> kvmap;
   std::map<std::string, bufferlist> dupmap;
   oro.omap_get_vals_by_keys(key_set, &dupmap, &err);
@@ -175,8 +184,12 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
 int KvFlatBtreeAsync::split(const index_data &idata, const object_data &odata) {
   int err = 0;
 
-  if (odata.size < 2*k){
+  if (odata.name != idata.obj) {
+    return -ECANCELED;
+  } else if (odata.size < 2*k){
     return -1;
+  } else if (idata.prefix != "") {
+    return -EPREFIX;
   }
 
   cout << "\t\t" << client_name << "-split: splitting " << idata.obj
@@ -410,15 +423,66 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
 
 void *KvFlatBtreeAsync::balancer(void *ptr) {
   KvFlatBtreeAsync * kvba = (KvFlatBtreeAsync *) ptr;
-  while (true) {
+  cout << kvba->client_name << ": balancer thread started" << std::endl;
+  bool alive = true;
+  int err;
+  while (alive) {
     //wait for a writer to be free
-    //kvba->bq->pop(kvba);
-
-    kvba->bal_death_lock.Lock();
-    if (kvba->bal_death) {
-      break;
+    if (!kvba->bq.empty()) {
+      balance_op this_op = kvba->bq.pop();
+      do {
+	if (this_op.idata2.obj != "") {
+	  cout << kvba->client_name << "-balancer: rebalancing "
+	      << this_op.idata1.str() << std::endl;
+	  err = kvba->rebalance(this_op.idata1, this_op.idata2);
+	  cout << kvba->client_name << "-balancer: rebalancing got " << err
+	      << std::endl;
+	} else if (this_op.odata.name != "") {
+	  cout << kvba->client_name << "-balancer: splitting "
+	      << this_op.idata1.str()  << std::endl;
+	  err = kvba->split(this_op.idata1, this_op.odata);
+	  cout << kvba->client_name << "-balancer: splitting got " << err
+	      << std::endl;
+	} else if (this_op.err) {
+	  cout << kvba->client_name << "-balancer: cleaning "
+	      << this_op.idata1.str() << std::endl;
+	  err = kvba->cleanup(this_op.idata1, this_op.err);
+	  cout << kvba->client_name << "-balancer: cleaning got " << err
+	      << std::endl;
+	}
+	if (err == -ESUICIDE) {
+	  cout << kvba->client_name << "-balancer IS SUICIDING!" << std::endl;
+	  break;
+	} else if (err == -ECANCELED || err == -EPREFIX || err == -ERANGE) {
+	    if (kvba->read_index(this_op.idata1.kdata.raw_key, &this_op.idata1,
+		this_op.idata2.obj == ""? NULL : &this_op.idata2)
+		== -ESUICIDE) {
+	      cout << kvba->client_name << " IS SUICIDING!" << std::endl;
+	      break;
+	    }
+	    cout << "\t" << kvba->client_name << ": prefix is "
+		<< this_op.idata1.str() << std::endl;
+	    if (this_op.idata1.is_timed_out(kvba->TIMEOUT)) {
+	      kvba->cleanup(this_op.idata1, err);
+	    }
+	    if (this_op.idata1.obj != this_op.odata.name) {
+	      err = 0;
+	    } else if (err == -ERANGE) {
+	      kvba->read_object(this_op.idata1.obj,
+		  this_op.odata.name == ""? NULL : &this_op.odata);
+	    }
+	  }
+      } while (err != 0 && err != -1);
     }
-    kvba->bal_death_lock.Unlock();
+
+    if (kvba->bq.empty()){
+      kvba->bal_death_lock.Lock();
+      if (kvba->bal_death) {
+	cout << kvba->client_name << "-balancer: got death signal" << std::endl;
+	alive = false;
+      }
+      kvba->bal_death_lock.Unlock();
+    }
   }
   return 0;
 }
@@ -674,7 +738,10 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
   cout << "\t\t" << client_name << ": cleaning up after " << idata.str()
       << std::endl;
   int err = 0;
-  assert(idata.prefix != "");
+  assert(idata.obj != "");
+  if (idata.prefix == "") {
+    return 0;
+  }
   map<std::string,bufferlist> new_index;
   map<std::string, pair<bufferlist, int> > assertions;
   switch (errno) {
@@ -826,10 +893,14 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
 }
 
 KvFlatBtreeAsync::~KvFlatBtreeAsync() {
-  bal_death_lock.Lock();
-  bal_death = true;
-  bal_death_lock.Unlock();
-  pthread_join(balance_thread, NULL);
+  finished_lock.Lock();
+  if (!finished) {
+    cout << client_name << "-destructor: waiting for op to finish" << std::endl;
+    finished_cond.Wait(finished_lock);
+  }
+  finished_lock.Unlock();
+  cout << client_name << "-destructor: sending death signal" << std::endl;
+  kill_balancer();
 }
 
 string KvFlatBtreeAsync::to_string(string s, int i) {
@@ -925,16 +996,13 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   if (r < 0) {
     cerr << client_name << ": Making the index failed with code " << r
 	<< std::endl;
-    return 0;
+  } else {
+    librados::ObjectWriteOperation make_max_obj;
+    make_max_obj.create(true);
+    make_max_obj.setxattr("unwritable", to_bl("0"));
+    r = io_ctx.operate(client_name, &make_max_obj);
+
   }
-
-  librados::ObjectWriteOperation make_max_obj;
-  make_max_obj.create(true);
-  make_max_obj.setxattr("unwritable", to_bl("0"));
-  r = io_ctx.operate(client_name, &make_max_obj);
-
-  BalanceQueue q;
-  bq = &q;
   bal_death = false;
   r = pthread_create(&balance_thread, NULL, balancer, (void*)this);
 
@@ -947,9 +1015,23 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
 
 }
 
+void KvFlatBtreeAsync::kill_balancer() {
+  bal_death_lock.Lock();
+  if (bal_death) {
+    bal_death_lock.Unlock();
+  } else {
+    bal_death = true;
+    bal_death_lock.Unlock();
+    pthread_join(balance_thread, NULL);
+  }
+}
+
 int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     bool update_on_existing) {
   cout << client_name << " is setting " << key << std::endl;
+  finished_lock.Lock();
+  finished = false;
+  finished_lock.Unlock();
   int err = 0;
   string obj;
   utime_t mytime;
@@ -1002,6 +1084,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 	<< std::endl;
     return -EEXIST;
   }
+  bq.reserve_space();
 
   //write
   librados::ObjectWriteOperation owo;
@@ -1026,7 +1109,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   }
   cout << "\t" << client_name << ": write finished with " << err << std::endl;
 
-  bq->push(balance_op(idata, odata));
+  bq.push(balance_op(idata, odata));
 
   if (idata.is_timed_out(mytime, TIMEOUT)) {
     //client died before objects were deleted
@@ -1034,15 +1117,25 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 	<< (mytime - idata.ts).sec()
 	<< '.' << (mytime - idata.ts).usec()
 	<< ", timeout is " << TIMEOUT << ")" << std::endl;
-    bq->push(balance_op(idata, err));
+    bq.push(balance_op(idata, err));
   }
 
   cout << "\t" << client_name << ": finished set and exiting" << std::endl;
+
+  finished_lock.Lock();
+  finished = true;
+  finished_cond.Signal();
+  finished_lock.Unlock();
+
   return 0;
 }
 
 int KvFlatBtreeAsync::remove(const string &key) {
   cout << client_name << ": removing " << key << std::endl;
+  finished_lock.Lock();
+  finished = false;
+  finished_lock.Unlock();
+  bq.reserve_space();
   int err = 0;
   string obj;
   string hk;
@@ -1108,7 +1201,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
 
   //attempt to verify that it does not need to be rebalanced, and rebalance
   //if it does need to be rebalanced (i.e., if we reduced the number to k).
-  bq->push(balance_op(idata, next_idata));
+  bq.push(balance_op(idata, next_idata));
 
   if (idata.is_timed_out(mytime, TIMEOUT)) {
     //this executes if we removed a key from an object that had an in
@@ -1118,13 +1211,22 @@ int KvFlatBtreeAsync::remove(const string &key) {
       << (mytime - idata.ts).sec()
       << '.' << (mytime - idata.ts).usec()
       << ", timeout is " << TIMEOUT << ")" << std::endl;
-    bq->push(balance_op(idata, err));
+    bq.push(balance_op(idata, err));
   }
+
+  finished_lock.Lock();
+  finished = true;
+  finished_cond.Signal();
+  finished_lock.Unlock();
+
   return 0;
 }
 
 int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   cout << client_name << ": getting " << key << std::endl;
+  finished_lock.Lock();
+  finished = false;
+  finished_lock.Unlock();
   int err = 0;
   std::set<std::string> key_set;
   key_set.insert(key);
@@ -1175,6 +1277,11 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
       return err;
     }
   }
+
+  finished_lock.Lock();
+  finished = true;
+  finished_cond.Signal();
+  finished_lock.Unlock();
 
   *val = omap[key];
 
@@ -1374,7 +1481,8 @@ bool KvFlatBtreeAsync::is_consistent() {
 
     //check that size is in the right range
     if (it->first != "1" &&
-	(size_int > 2*k || size_int < k) && parsed_index.size() > 1) {
+	(size_int > 2*k + margin || size_int < k - margin)
+	&& parsed_index.size() > 1) {
       cout << "Not consistent! Object " << *it << " has size " << size_int
 	  << ", which is outside the acceptable range." << std::endl;
       ret = false;
@@ -1578,29 +1686,50 @@ string KvFlatBtreeAsync::str() {
   return ret.str();
 }
 
-int BalanceQueue::push(balance_op op) {
-  cout << "in push" << std::endl;
+int BalanceQueue::reserve_space() {
   bal_lock.Lock();
-  cout << "lock successful" << std::endl;
-  if (bal_set.count(op) == 0){
-    if (queue_size == max_queue_size) {
-      int err = queue_not_full.Wait(bal_lock);
-      if (err < 0) {
-        return err;
-      }
+  assert(queue_size <= max_queue_size);
+  if (queue_size == max_queue_size) {
+    int err = queue_not_full.Wait(bal_lock);
+    if (err < 0) {
+      return err;
     }
-    queue_size++;
+  }
+  queue_size++;
+  bal_lock.Unlock();
+  return 0;
+}
+
+bool BalanceQueue::empty() {
+  bool ret = false;
+  bal_lock.Lock();
+  assert(queue_size <= max_queue_size);
+  if (queue_size == 0) {
+    ret = true;
+  }
+  bal_lock.Unlock();
+  return ret;
+}
+
+int BalanceQueue::push(balance_op op) {
+  assert(op.idata1.kdata.prefix != "");
+  bal_lock.Lock();
+  assert(queue_size < max_queue_size);
+  if (bal_set.count(op) == 0){
     bal_q.push(op);
     bal_set.insert(op);
+  } else {
+    queue_size--;
+    queue_not_full.Signal();
   }
   bal_lock.Unlock();
   return 0;
 }
 
-int BalanceQueue::pop(KvFlatBtreeAsync * kvba) {
+balance_op BalanceQueue::pop() {
   balance_op this_op;
-  int err = 0;
   bal_lock.Lock();
+  assert(queue_size <= max_queue_size);
   //set up the write
   if (!bal_q.empty()) {
     this_op = bal_q.front();
@@ -1609,13 +1738,5 @@ int BalanceQueue::pop(KvFlatBtreeAsync * kvba) {
     queue_not_full.Signal();
   }
   bal_lock.Unlock();
-
-  if (this_op.idata2.obj != "") {
-    err = kvba->KvFlatBtreeAsync::rebalance(this_op.idata1, this_op.idata2);
-  } else if (this_op.odata.name != "") {
-    err = kvba->KvFlatBtreeAsync::split(this_op.idata1, this_op.odata);
-  } else if (this_op.err) {
-    err = kvba->KvFlatBtreeAsync::cleanup(this_op.idata1, this_op.err);
-  }
-  return err;
+  return this_op;
 }

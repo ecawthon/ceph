@@ -108,6 +108,7 @@ struct index_data {
 
   //true if there is a prefix and now - ts > timeout.
   bool is_timed_out(utime_t now, utime_t timeout) const;
+  bool is_timed_out(utime_t timeout) const;
 
   //note that this does not include the key
   void encode(bufferlist &bl) const {
@@ -211,16 +212,19 @@ struct balance_op {
   int err;
 
   balance_op()
+  : err(0)
   {}
 
   balance_op(index_data i, object_data o)
   : idata1(i),
-    odata(o)
+    odata(o),
+    err(0)
   {}
 
   balance_op(index_data i1, index_data i2)
   : idata1(i1),
-    idata2(i2)
+    idata2(i2),
+    err(0)
   {}
 
   balance_op(index_data i, int e)
@@ -233,12 +237,36 @@ struct balance_op {
 namespace std {
   template<> struct less<balance_op> {
     bool operator() (const balance_op& b1, const balance_op& b2) const {
-	  return b1.err < b2.err;
+      return b1.err < b2.err;
     }
   };
 }
 
-class BalanceQueue;
+class BalanceQueue {
+protected:
+
+  Cond queue_not_full;
+  Mutex bal_lock;
+  int queue_size;
+  int max_queue_size;
+  std::queue<balance_op> bal_q;
+  std::set<balance_op> bal_set;
+
+public:
+  BalanceQueue()
+  : bal_lock("BalanceQueue::bal_lock"),
+    queue_size(0),
+    max_queue_size(2)
+  {}
+
+  int reserve_space();
+
+  bool empty();
+
+  int push(balance_op op);
+
+  balance_op pop();
+};
 
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
@@ -256,10 +284,14 @@ protected:
   int wait_index;
   utime_t TIMEOUT;
   pthread_t balance_thread;
-  BalanceQueue * bq;
+  BalanceQueue bq;
 
   Mutex bal_death_lock;
+  Mutex finished_lock;
+  Cond finished_cond;
   bool bal_death;
+  bool finished;
+  int margin;
   friend struct index_data;
   friend class BalanceQueue;
 
@@ -469,7 +501,7 @@ public:
    */
   int suicide();
 
-KvFlatBtreeAsync(int k_val, string name)
+KvFlatBtreeAsync(int k_val, string name, int marg)
   : k(k_val),
     index_name("index_object"),
     rados_id("admin"),
@@ -479,7 +511,10 @@ KvFlatBtreeAsync(int k_val, string name)
     interrupt(&KeyValueStructure::nothing),
     wait_index(1),
     TIMEOUT(1,0),
-    bal_death_lock("Balance thread death lock")
+    bal_death_lock("Balance thread death lock"),
+    finished_lock("Finished lock"),
+    finished(true),
+    margin(marg)
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -494,7 +529,8 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     wait_ms(1000),
     wait_index(0),
     TIMEOUT(1,0),
-    bal_death_lock("Balance thread death lock")
+    bal_death_lock("Balance thread death lock"),
+    finished_lock("Finished lock")
   {}
 
 ~KvFlatBtreeAsync();
@@ -541,6 +577,8 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
    */
   int setup(int argc, const char** argv);
 
+  void kill_balancer();
+
   int set(const string &key, const bufferlist &val,
         bool update_on_existing);
 
@@ -578,26 +616,6 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
 
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 
-};
-
-class BalanceQueue {
-protected:
-  int queue_size;
-  Cond queue_not_full;
-  Mutex bal_lock;
-  int max_queue_size;
-  std::queue<balance_op> bal_q;
-  std::set<balance_op> bal_set;
-
-public:
-  BalanceQueue()
-  : bal_lock("BalanceQueue::bal_lock"),
-    max_queue_size(5)
-  {}
-
-  int push(balance_op op);
-
-  int pop(KvFlatBtreeAsync * kvba);
 };
 
 #endif /* KVFLATBTREEASYNC_H_ */

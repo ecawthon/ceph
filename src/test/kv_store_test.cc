@@ -191,12 +191,12 @@ int KvStoreTest::setup(int argc, const char** argv) {
   }
 
 
-/*  librados::ObjectIterator it;
+  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
-  }*/
+  }
 
 
   int err = kvs->setup(argc, argv);
@@ -1044,6 +1044,7 @@ int KvStoreTest::test_verify_random_set_rms(int argc, const char** argv) {
 
 int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   int err = 0;
+  kvs->kill_balancer();
   pthread_t real_threads[clients];
   int set_size = ((int)ceil(clients / 2.0));
   set_args set_args_ar[set_size];
@@ -1061,21 +1062,18 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   KeyValueStructure * kvbas[entries];
   struct set_args init_set_args[entries];
 
-  for(int i = 0; i < 10; i++) {
+  for(int i = 0; i < entries; i++) {
     string name = KvFlatBtreeAsync::to_string("prados",i);
     cout << "name is " << name << std::endl;
     kvbas[i] = new KvFlatBtreeAsync(2, name, clients);
     kvbas[i]->setup(argc, argv);
   }
 
-  for (int i = 0; i < 10; i++) {
-    cout << i << std::endl;
+  for (int i = 0; i < entries; i++) {
     pair<string, bufferlist> this_pair;
     this_pair.first = random_string(5);
     this_pair.second = KvFlatBtreeAsync::to_bl(random_string(7));
-    cout << this_pair.first << std::endl;
     bigmap[count] = this_pair;
-    cout << bigmap[count].first << std::endl;
     init_set_args[i].kvs = kvbas[i];
     init_set_args[i].key = bigmap[count].first;
     init_set_args[i].val = bigmap[count].second;
@@ -1088,19 +1086,19 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
     count++;
   }
 
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < entries; i++) {
     void *status;
+    delete kvbas[i];
+    cout << "deleted " << i << std::endl;
     int err = pthread_join(thread[i], &status);
     if (err < 0) {
 	cout << "error joining first pthread: " << err << std::endl;
 	return err;
     }
-    if (i != 9) {
-      delete kvbas[i];
-    }
+    cout << "joined " << i << std::endl;
   }
-  assert(kvbas[9]->is_consistent());
-  delete kvbas[9];
+
+  assert(kvs->is_consistent());
 
   //setup kvs
   for(int i = 0; i < clients; i++) {
@@ -1127,8 +1125,6 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 	    KvFlatBtreeAsync::to_bl(random_string(7)));
 	set_args_ar[set_index].key = bigmap[count].first;
 	set_args_ar[set_index].val = bigmap[count].second;
-	cout << "kvs" << j << " set to insert "
-	    << bigmap[count].first << std::endl;
 	sws[j] = &set_args_ar[set_index].sw;
 	err = pthread_create(&real_threads[j], NULL,
 	    pset, (void*)&set_args_ar[set_index]);
@@ -1241,10 +1237,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error setting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'u':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1257,10 +1253,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'd':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1274,10 +1270,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'r':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1291,10 +1287,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     }
 
@@ -1459,8 +1455,8 @@ int main(int argc, const char** argv) {
     cout << "error " << err << std::endl;
     return err;
   }
-  err = kvst.teuthology_tests();
-  //err = kvst.verification_tests(argc, argv);
+  //err = kvst.teuthology_tests();
+  err = kvst.verification_tests(argc, argv);
   //err = kvst.functionality_tests();
   if (err < 0) return err;
   //kvst.stress_tests();

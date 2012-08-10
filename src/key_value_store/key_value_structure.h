@@ -54,6 +54,8 @@ public:
    */
   virtual int setup(int argc, const char** argv) = 0;
 
+  virtual void kill_balancer() = 0;
+
   /**
    * set up waitpoints for verification testing
    */
