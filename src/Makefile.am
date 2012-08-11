@@ -474,6 +474,17 @@ libhadoopcephfs_la_LDFLAGS = ${AM_LDFLAGS} -version-info 1:0:0 -export-symbols-r
 lib_LTLIBRARIES += libhadoopcephfs.la
 endif
 
+## key_value_store classes
+
+# key_value_store: key value store class
+libcls_kvs_la_SOURCES = key_value_store/cls_kvs.cc
+libcls_kvs_la_CFLAGS = ${AM_CFLAGS}
+libcls_kvs_la_CXXFLAGS= ${AM_CXXFLAGS}
+libcls_kvs_la_LIBADD = $(PTHREAD_LIBS) $(EXTRALIBS)
+libcls_kvs_la_LDFLAGS = ${AM_LDFLAGS} -version-info 1:0:0 -export-symbols-regex '.*__cls_.*'
+
+radoslib_LTLIBRARIES += libcls_kvs.la
+
 ## System tests
 libsystest_la_SOURCES = \
 	test/system/cross_process_sem.cc \
