@@ -17,8 +17,8 @@ using namespace std;
 using ceph::bufferlist;
 
 struct assert_size_args {
-  int bound; //the size to compare to - should be k or 2k
-  int comparator; //should be CEPH_OSD_CMPXATTR_OP_EQ,
+  uint64_t bound; //the size to compare to - should be k or 2k
+  uint64_t comparator; //should be CEPH_OSD_CMPXATTR_OP_EQ,
 		  //CEPH_OSD_CMPXATTR_OP_LT, or
 		  //CEPH_OSD_CMPXATTR_OP_GT
 
@@ -80,7 +80,7 @@ WRITE_CLASS_ENCODER(idata_from_idata_args)
 
 struct omap_set_args {
   map<string, bufferlist> omap;
-  int bound;
+  uint64_t bound;
   bool exclusive;
 
   void encode(bufferlist &bl) const {
@@ -100,7 +100,7 @@ WRITE_CLASS_ENCODER(omap_set_args)
 
 struct omap_rm_args {
   std::set<string> omap;
-  int bound;
+  uint64_t bound;
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
@@ -119,8 +119,8 @@ WRITE_CLASS_ENCODER(omap_rm_args)
 
 struct rebalance_args {
   object_data odata;
-  int bound;
-  int comparator;
+  uint64_t bound;
+  uint64_t comparator;
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
