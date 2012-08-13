@@ -175,7 +175,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
 int KvFlatBtreeAsync::split(const index_data &idata, const object_data odata) {
   int err = 0;
 
-  if (odata.size < 2*k){
+  if ((int)odata.size < 2*k){
     return -1;
   }
 
@@ -238,7 +238,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   object_data odata1;
   object_data odata2;
 
-  if(in_odata.size >= k && in_odata.size <= 2 * k) {
+  if((int)in_odata.size >= k && (int)in_odata.size <= 2 * k) {
     //nothing needs to be done
     return -1;
   }
@@ -303,8 +303,8 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       << "," << odata2.name  << " with size " << odata2.size << std::endl;
 
   //calculations
-  if (odata1.size >= k && odata1.size <= 2*k && odata2.size >= k
-      && odata2.size <= 2*k) {
+  if ((int)odata1.size >= k && (int)odata1.size <= 2*k && (int)odata2.size >= k
+      && (int)odata2.size <= 2*k) {
     //nothing to do
     cout << "\t\t" << client_name << "-rebalance: both sizes in range, so"
 	<< " aborting " << std::endl;
@@ -322,7 +322,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       pair<int, string>(ADD_PREFIX, index_name),
       &other_ops[0]));
 
-  if (odata1.size + odata2.size <= 2*k) {
+  if ((int)odata1.size + (int)odata2.size <= 2*k) {
     //merge
     cout << "\t\t" << client_name << "-rebalance: merging " << odata1.name
 	<< " and " << odata2.name << " to get " << o2w
@@ -345,7 +345,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     string o1w = to_string(client_name, client_index++);
     for (it = odata1.omap.begin();
 	it != odata1.omap.end() && (int)write1_map.size()
-	    <= (odata1.size + odata2.size) / 2;
+	    <= ((int)odata1.size + (int)odata2.size) / 2;
 	++it) {
       write1_map.insert(*it);
     }
@@ -358,7 +358,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       map<std::string, bufferlist>::iterator it2;
       for(it2 = odata2.omap.begin();
 	  (it2 != odata2.omap.end()) && ((int)write1_map.size()
-	      <= (odata1.size + odata2.size) / 2);
+	      <= ((int)odata1.size + (int)odata2.size) / 2);
 	  ++it2) {
 	write1_map.insert(*it2);
       }
@@ -481,6 +481,13 @@ void KvFlatBtreeAsync::set_up_ops(
   map<string, bufferlist> to_insert;
   std::set<string> to_remove;
   map<string, pair<bufferlist, int> > assertions;
+  if (create_data.size() > 0) {
+    for (int i = 0; i < (int)idata.to_delete.size(); ++i) {
+      it->first = pair<int, string>(UNWRITE_OBJECT, idata.to_delete[i][1]);
+      set_up_unwrite_object(delete_data[i].version, it->second);
+      it++;
+    }
+  }
   for (int i = 0; i < (int)idata.to_create.size(); ++i) {
     index_data this_entry;
     this_entry.obj = idata.to_create[i][1];
@@ -488,13 +495,6 @@ void KvFlatBtreeAsync::set_up_ops(
     if (create_data.size() > 0) {
       it->first = pair<int, string>(MAKE_OBJECT, idata.to_create[i][1]);
       set_up_make_object(create_data[i].omap, it->second);
-      it++;
-    }
-  }
-  if (create_data.size() > 0) {
-    for (int i = 0; i < (int)idata.to_delete.size(); ++i) {
-      it->first = pair<int, string>(UNWRITE_OBJECT, idata.to_delete[i][1]);
-      set_up_unwrite_object(delete_data[i].version, it->second);
       it++;
     }
   }
@@ -591,7 +591,11 @@ int KvFlatBtreeAsync::perform_ops(const string &debug_prefix,
 	//most likely because it changed, in which case it will be -ERANGE
 	cerr << debug_prefix << " marking " << it->first.second
 	    << "failed with code" << err << std::endl;
-	cleanup(idata, -ETIMEDOUT);
+	if (it->first.second == (*idata.to_delete.begin())[0]) {
+	  cleanup(idata, -EFIRSTOBJ);
+	} else {
+	  cleanup(idata, -ERANGE);
+	}
 	return err;
       }
       cout << debug_prefix << " marked " << it->first.second << std::endl;
@@ -652,6 +656,99 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
   map<std::string,bufferlist> new_index;
   map<std::string, pair<bufferlist, int> > assertions;
   switch (errno) {
+  case -EFIRSTOBJ: {
+    //this happens if the split or rebalance failed to mark the first object,
+    //meaning only the index needs to be changed.
+    //restore objects that had been marked unwritable.
+    for(vector<vector<string> >::const_iterator it =
+	idata.to_delete.begin();
+	it != idata.to_delete.end(); ++it) {
+      index_data this_entry;
+      this_entry.obj = (*it)[1];
+      new_index[(*it)[0]] = to_bl(this_entry);
+      this_entry = idata;
+      this_entry.obj = (*it)[1];
+      cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
+  	<< this_entry.str() << std::endl;
+      assertions[(*it)[0]] =
+	  pair<bufferlist, int>(to_bl(this_entry),
+	      CEPH_OSD_CMPXATTR_OP_EQ);
+    }
+
+    //update the index
+    librados::ObjectWriteOperation update_index;
+    update_index.omap_cmp(assertions, &err);
+    update_index.omap_set(new_index);
+    cout << "\t\t\t" << client_name << "-cleanup: updating index" << std::endl;
+    if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
+      return -ESUICIDE;
+    }
+    err = io_ctx.operate(index_name, &update_index);
+    if (err < 0) {
+      cerr << "\t\t\t" << client_name << "-cleanup: rewriting failed with "
+	  << err << ". returning -ECANCELED" << std::endl;
+      return -ECANCELED;
+    }
+    cout << "\t\t\t" << client_name << "-cleanup: updated index. cleanup done."
+	<< std::endl;
+    break;
+  }
+  case -ERANGE: {
+    //this happens if a split or rebalance fails to mark an object. It is a
+    //special case of rolling back that does not have to deal with new objects.
+
+    //restore objects that had been marked unwritable.
+    vector<vector<string> >::const_iterator it;
+    for(it = idata.to_delete.begin();
+	it != idata.to_delete.end(); ++it) {
+      index_data this_entry;
+      this_entry.obj = (*it)[1];
+      new_index[(*it)[0]] = to_bl(this_entry);
+      this_entry = idata;
+      this_entry.obj = (*it)[1];
+      cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
+  	<< this_entry.str() << std::endl;
+      assertions[(*it)[0]] =
+	  pair<bufferlist, int>(to_bl(this_entry),
+	      CEPH_OSD_CMPXATTR_OP_EQ);
+    }
+    it = idata.to_delete.begin();
+    librados::ObjectWriteOperation restore;
+    set_up_restore_object(&restore);
+    if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
+      return -ESUICIDE;
+    }
+    cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+	<< std::endl;
+    err = io_ctx.operate((*it)[1], &restore);
+    if (err < 0) {
+      //i.e., -ECANCELED because the object was already restored by someone
+      //else
+	cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+	  << " failed with " << err << std::endl;
+    } else {
+      cout << "\t\t\t" << client_name << "-cleanup: restored " << (*it)[1]
+	   << std::endl;
+    }
+
+    //update the index
+    librados::ObjectWriteOperation update_index;
+    update_index.omap_cmp(assertions, &err);
+    update_index.omap_set(new_index);
+    cout << "\t\t\t" << client_name << "-cleanup: updating index" << std::endl;
+    if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
+      return -ESUICIDE;
+    }
+    err = io_ctx.operate(index_name, &update_index);
+    if (err < 0) {
+      cerr << "\t\t\t" << client_name << "-cleanup: rewriting failed with "
+	  << err << ". returning -ECANCELED" << std::endl;
+      return -ECANCELED;
+    }
+    cout << "\t\t\t" << client_name << "-cleanup: updated index. cleanup done."
+	<< std::endl;
+    break;
+  }
   case -ENOENT: {
     cout << "\t\t" << client_name << "-cleanup: rolling forward" << std::endl;
     //all changes were created except for updating the index and possibly
@@ -715,8 +812,7 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
       librados::ObjectWriteOperation restore;
       set_up_restore_object(&restore);
       cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
-	  << "(" << (*it)[0] << "," << idata.prefix << (*it)[1]
-	       << ")" << std::endl;
+	  << this_entry.str() << std::endl;
       if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
 	return -ESUICIDE;
       }
@@ -766,14 +862,19 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
       to_remove.insert((*it)[0]);
       librados::ObjectWriteOperation rm;
       rm.remove();
-      cout << "\t\t\t" << client_name << "-cleanup: removing " << (*it)[1]
-          << std::endl;
       if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
 	return -ESUICIDE;
       }
-      io_ctx.operate((*it)[1], &rm);
-      cout << "\t\t\t" << client_name << "-cleanup: removed " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: removing " << (*it)[1]
           << std::endl;
+      err = io_ctx.operate((*it)[1], &rm);
+      if (err < 0) {
+	cout << "\t\t\t" << client_name << "-cleanup: failed to remove "
+	    << (*it)[1] << std::endl;
+      } else {
+	cout << "\t\t\t" << client_name << "-cleanup: removed " << (*it)[1]
+            << std::endl;
+      }
     }
 
     //update the index
@@ -1028,7 +1129,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 	      << '.' << (mytime - idata.ts).usec()
 	      << ", timeout is " << TIMEOUT << ")" << std::endl;
 	//the client died after deleting the object. clean up.
-	cleanup(idata, err);
+	cleanup(idata, -EPREFIX);
       } else if (idata.prefix != "") {
 	cout << "\t" << client_name << ": prefix and not timed out, "
 	    << "so restarting ( it has been " << (mytime - idata.ts).sec()
@@ -1049,7 +1150,7 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
 	<< (mytime - idata.ts).sec()
 	<< '.' << (mytime - idata.ts).usec()
 	<< ", timeout is " << TIMEOUT << ")" << std::endl;
-    cleanup(idata,err);
+    cleanup(idata,0);
   }
 
   err = 0;
@@ -1146,12 +1247,12 @@ int KvFlatBtreeAsync::remove(const string &key) {
 
   //attempt to verify that it does not need to be rebalanced, and rebalance
   //if it does need to be rebalanced (i.e., if we reduced the number to k).
-  if (odata.size < k || odata.size == k) {
-    assert((int)odata.omap.size() == odata.size);
+  if ((int)odata.size < k || (int)odata.size == k) {
+    assert((int)odata.omap.size() == (int)odata.size);
     odata.size--;
     odata.omap.erase(key);
     odata.version = write_aioc->get_version();
-    assert((int)odata.omap.size() == odata.size);
+    assert((int)odata.omap.size() == (int)odata.size);
     do {
       err = rebalance(idata, next_idata, odata);
       cout << "\t" << client_name << ": rebalance after remove got " << err
@@ -1188,7 +1289,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
         //this executes if we removed a key from an object that had an in
         //progress split/merge and the other process died before it could mark or
         //delete obj.
-        cleanup(idata, err);
+        cleanup(idata, -EPREFIX);
 	err = read_index(key, &idata, &next_idata);
 	if (err == -ESUICIDE) {
 	  cout << client_name << " IS SUICIDING!" << std::endl;
@@ -1212,7 +1313,7 @@ int KvFlatBtreeAsync::remove(const string &key) {
     //this executes if we removed a key from an object that had an in
     //progress split/merge and the other process died before it could mark or
     //delete obj.
-    cleanup(idata, err);
+    cleanup(idata, 0);
   } /*else if (idata.prefix != "") {
     cout << "\t" << client_name << ": prefix and not timed out, "
 	<< "so restarting ( it has been " << (mytime - idata.ts).sec()

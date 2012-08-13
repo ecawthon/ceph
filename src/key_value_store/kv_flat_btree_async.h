@@ -10,6 +10,7 @@
 
 #define ESUICIDE 134
 #define EPREFIX 136
+#define EFIRSTOBJ 138
 
 #include "key_value_store/key_value_structure.h"
 #include "include/utime.h"
@@ -68,7 +69,21 @@ struct key_data {
   string encoded() const {
     return prefix + raw_key;
   }
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(raw_key, bl);
+    ::encode(prefix, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(raw_key, p);
+    ::decode(prefix, p);
+    DECODE_FINISH(p);
+  }
 };
+WRITE_CLASS_ENCODER(key_data)
 
 /**
  * The index object is a key value map that stores
@@ -162,6 +177,7 @@ struct index_data {
     return strm.str();
   }
 };
+WRITE_CLASS_ENCODER(index_data)
 
 /**
  * Stores information read from a librados object.
@@ -172,8 +188,8 @@ struct object_data {
   map<std::string, bufferlist> omap; // the omap of the object
   bool unwritable; // an xattr that, if false, means an op is in
 		  // progress and other clients should not write to it.
-  int version; //the version at time of read
-  int size; //the number of elements in the omap
+  uint64_t version; //the version at time of read
+  uint64_t size; //the number of elements in the omap
 
   object_data()
   {}
@@ -199,7 +215,29 @@ struct object_data {
     name(the_name),
     version(the_version)
   {}
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(kdata, bl);
+    ::encode(name, bl);
+    ::encode(omap, bl);
+    ::encode(unwritable, bl);
+    ::encode(version, bl);
+    ::encode(size, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(kdata, p);
+    ::decode(name, p);
+    ::decode(omap, p);
+    ::decode(unwritable, p);
+    ::decode(version, p);
+    ::decode(size, p);
+    DECODE_FINISH(p);
+  }
 };
+WRITE_CLASS_ENCODER(object_data)
 
 class KvFlatBtreeAsync;
 
