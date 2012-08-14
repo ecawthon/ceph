@@ -37,7 +37,7 @@ KvStoreTest::KvStoreTest()
 : k(2),
   wait_time(100000),
   entries(30),
-  ops(10),
+  ops(100),
   clients(5),
   increment(10),
   key_size(5),
@@ -189,7 +189,6 @@ int KvStoreTest::setup(int argc, const char** argv) {
     rados.shutdown();
     return r;
   }
-
 
 /*  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
@@ -361,6 +360,7 @@ int KvStoreTest::test_split_merge() {
     data[key.str()] = val;
     kvs->set(key.str(), val, true);
     if (!kvs->is_consistent()) {
+      cout << kvs->str();
       err = -EINCONSIST;
       return err;
     }
@@ -375,13 +375,15 @@ int KvStoreTest::test_split_merge() {
   nextval << "Value " << 0;
   nextvalbfr.append(nextval.str());
   data[nextkey.str()] = nextvalbfr;
-  err = kvs->set(nextkey.str(), nextvalbfr, true);
+  err = kvs->set(nextkey.str(), nextvalbfr, false);
   if (err < 0) {
     cout << "[x] Split failed with error " << err;
+    cout << kvs->str();
     return err;
   }
   if (!kvs->is_consistent()) {
     cout << "[x] Split failed - not consistent" << std::endl;
+    cout << kvs->str();
     err = -EINCONSIST;
     return err;
   }
@@ -395,7 +397,7 @@ int KvStoreTest::test_split_merge() {
     valstrm << "Value " << i;
     val.append(valstrm.str().c_str());
     data[key.str()] = val;
-    kvs->set(key.str(), val, true);
+    kvs->set(key.str(), val, false);
     if (!kvs->is_consistent()) {
       err = -EINCONSIST;
       return err;
@@ -405,7 +407,7 @@ int KvStoreTest::test_split_merge() {
   //now removing one key should make it rebalance...
   cout << kvs->str() << std::endl;
   stringstream midkey;
-  midkey << "Key " << 4;
+  midkey << "Key " << 2 * k - 1;
   err = kvs->remove(midkey.str());
   if (err < 0) {
     cout << "[x] Rebalance failed with error " << err;
@@ -420,7 +422,7 @@ int KvStoreTest::test_split_merge() {
   cout << "[v] passed rebalance test" << std::endl;
 
   //keep removing keys until they have to merge...
-  for (int i = 3 * k; i > 2 * k; --i) {
+  for (int i = 3 * k - 1; i > k + 1; --i) {
     stringstream key;
     key << "Key " << i;
     err = kvs->remove(key.str());
@@ -664,16 +666,14 @@ int KvStoreTest::test_random_insertions() {
   int err = 0;
   vector<pair<string, bufferlist> > map_vector;
   for (int i = 0; i < entries; i++) {
-      bufferlist bfr;
-      bfr.append(random_string(7));
-      map_vector.push_back(pair<string,bufferlist>(random_string(5), bfr));
-    }
+    bufferlist bfr;
+    bfr.append(random_string(7));
+    map_vector.push_back(pair<string,bufferlist>(random_string(5), bfr));
+  }
   cout << "testing random insertions";
   for (int i = 0; i < entries; i++) {
     cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tinitial:" << i + 1
 	<< " / " << entries << std::endl;
-    cout << ".";
-    cout.flush();
     pair<string,bufferlist> this_pair = map_vector[i];
     err = kvs->set(this_pair.first, this_pair.second, true);
     if (err < 0) {
@@ -1218,7 +1218,10 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
 int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
 {
   int err = 0;
-  test_random_insertions();
+  err = test_random_insertions();
+  if (err < 0) {
+    return err;
+  }
   vector<kv_bench_datum> datums;
   for (int i = 0; i < ops; i++) {
     StopWatch sw;
@@ -1227,12 +1230,12 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
 	<< ops << std::endl;
     pair<string, bufferlist> kv;
     int random = (rand() % 100);
-    cout << random << std::endl;
     d.op = probs.lower_bound(random)->second;
     switch (d.op) {
     case 'i':
       kv = (((KvStoreTest *)this)->*distr)(true);
       if (kv.first == "") {
+	i--;
 	continue;
       }
       sw.start_time();
@@ -1241,14 +1244,15 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error setting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'u':
       kv = (((KvStoreTest *)this)->*distr)(false);
       if (kv.first == "") {
+	i--;
 	continue;
       }
       sw.start_time();
@@ -1257,14 +1261,15 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'd':
       kv = (((KvStoreTest *)this)->*distr)(false);
       if (kv.first == "") {
+	i--;
 	continue;
       }
       key_map.erase(kv.first);
@@ -1274,14 +1279,15 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'r':
       kv = (((KvStoreTest *)this)->*distr)(false);
       if (kv.first == "") {
+	i--;
 	continue;
       }
       bufferlist val;
@@ -1291,10 +1297,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     }
 
@@ -1348,14 +1354,14 @@ int KvStoreTest::functionality_tests() {
 
 int KvStoreTest::stress_tests() {
   int err = 0;
-  kvs->remove_all();
+  //kvs->remove_all();
   //err = test_non_random_insert_gets();
   if (err < 0) {
     cout << "non-random inserts and gets failed with code " << err;
     cout << std::endl;
     return err;
   }
-  //err = test_random_insertions();
+  err = test_random_insertions();
   if (err < 0) {
     cout << "random insertions test failed with code " << err;
     cout << std::endl;
