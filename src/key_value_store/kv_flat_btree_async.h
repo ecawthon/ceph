@@ -31,6 +31,8 @@ enum {
   REMOVE_PREFIX = 6
 };
 
+struct rebalance_args;
+
 /**
  * stores information about a key in the index.
  *
@@ -51,6 +53,10 @@ struct key_data {
   : raw_key(key)
   {
     raw_key == "" ? prefix = "1" : prefix = "0";
+  }
+
+  bool operator!=(key_data k) {
+    return ((raw_key != k.raw_key) || (prefix != k.prefix));
   }
 
   /**
@@ -124,6 +130,7 @@ struct index_data {
   //note that this does not include the key
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
+    ::encode(kdata, bl);
     ::encode(prefix, bl);
     ::encode(ts, bl);
     ::encode(prefix, bl);
@@ -134,6 +141,7 @@ struct index_data {
   }
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
+    ::decode(kdata, p);
     ::decode(prefix, p);
     ::decode(ts, p);
     ::decode(prefix, p);
@@ -311,7 +319,7 @@ protected:
    * @post: odata has complete information
    * @return -1 if obj does not need to be split,
    */
-  int split(const index_data &idata, const object_data odata);
+  int split(const index_data &idata);
 
   /**
    * reads o1 and the next object after o1 and, if necessary, rebalances them.
@@ -330,7 +338,7 @@ protected:
    * should be repeated)
    */
   int rebalance(const index_data &idata1,
-      const index_data &next_idata, const object_data &odata1);
+      const index_data &next_idata);
 
   /**
    * performs an ObjectReadOperation to populate odata
@@ -338,6 +346,8 @@ protected:
    * @post: odata has all information about obj except for key (which is "")
    */
   int read_object(const string &obj, object_data * odata);
+
+  int read_object(const string &obj, rebalance_args * args);
 
   /**
    * sets up owo to change the index in preparation for a split/merge.

@@ -85,12 +85,14 @@ struct omap_set_args {
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
+    ::encode(omap, bl);
     ::encode(bound, bl);
     ::encode(exclusive, bl);
     ENCODE_FINISH(bl);
   }
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
+    ::decode(omap, p);
     ::decode(bound, p);
     ::decode(exclusive, p);
     DECODE_FINISH(p);
