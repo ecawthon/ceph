@@ -16,6 +16,7 @@
 #include "include/utime.h"
 #include "include/rados.h"
 #include "include/encoding.h"
+#include <cfloat>
 #include <sstream>
 #include <stdarg.h>
 
@@ -247,24 +248,39 @@ struct object_data {
 };
 WRITE_CLASS_ENCODER(object_data)
 
+/*struct AioOperation {
+  int set_callback(void *cb_arg, callback_t cb);
+  int wait_for_safe();
+  int wait_for_safe_and_cb();
+  bool is_safe();
+  bool is_safe_and_cb();
+  int get_return_value();
+
+};*/
+
 class KvFlatBtreeAsync;
 
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
+
+  //this should not change once operations start being called.
   int k;
   string index_name;
   librados::IoCtx io_ctx;
   string rados_id;
   string client_name;
-  int client_index;
   librados::Rados rados;
   string pool_name;
   injection_t interrupt;
   vector<__useconds_t> waits;
   unsigned wait_ms;
-  int wait_index;
   utime_t TIMEOUT;
-  int margin;
+
+  //don't use this with aio.
+  int wait_index;
+
+
+  int client_index;
   friend struct index_data;
 
   //These read, but do not write, librados objects
@@ -482,8 +498,7 @@ KvFlatBtreeAsync(int k_val, string name, int marg)
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     wait_index(1),
-    TIMEOUT(1,0),
-    margin(marg)
+    TIMEOUT(100000,0)
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -499,6 +514,9 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     wait_index(0),
     TIMEOUT(1,0)
   {}
+
+  int handle_set_rm_errors(int &err, string key, string obj,
+      index_data * idata, index_data * next_idata, utime_t &mytime);
 
   /**
    * creates a string with an int at the end.
@@ -578,6 +596,14 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
   int get_all_keys(std::set<string> *keys);
 
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
+
+/*
+  int aio_get(const string &key, bufferlist *val, callback_t cb);
+
+  int aio_set(const string &key, const bufferlist &val, callback_t cb);
+
+  int aio_remove(const string &key, callback_t cb);
+*/
 
 };
 

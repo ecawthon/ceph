@@ -19,20 +19,6 @@
 #include <sstream>
 #include <cmath>
 
-void StopWatch::start_time() {
-  begin_time = ceph_clock_now(g_ceph_context);
-}
-void StopWatch::stop_time() {
-  end_time = ceph_clock_now(g_ceph_context);
-}
-double StopWatch::get_time() {
-  return (end_time - begin_time) * 1000;
-}
-
-void StopWatch::clear() {
-  begin_time = end_time = utime_t();
-}
-
 KvStoreTest::KvStoreTest()
 : k(2),
   wait_time(100000),
@@ -1244,10 +1230,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error setting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     case 'u':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1261,10 +1247,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     case 'd':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1279,10 +1265,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     case 'r':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1297,31 +1283,33 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } /*else if (!kvs->is_consistent()) {
+      } else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }*/
+      }
       break;
     }
 
-    double time = sw.get_time();
-    sw.clear();
-    d.latency = time;
-    datums.push_back(d);
-    data.avg_latency = (data.avg_latency * data.completed_ops + time)
-        / (data.completed_ops + 1);
-    data.completed_ops++;
-    if (time < data.min_latency) {
-      data.min_latency = time;
-    }
-    if (time > data.max_latency) {
-      data.max_latency = time;
-    }
-    data.total_latency += time;
-    ++(data.freq_map[time / increment]);
-    if (data.freq_map[time / increment] > data.mode.second) {
-	data.mode.first = time / increment;
-      data.mode.second = data.freq_map[time / increment];
+    if (i > ops / 10) {
+      double time = sw.get_time();
+      sw.clear();
+      d.latency = time;
+      datums.push_back(d);
+      data.avg_latency = (data.avg_latency * data.completed_ops + time)
+	  / (data.completed_ops + 1);
+      data.completed_ops++;
+      if (time < data.min_latency) {
+	data.min_latency = time;
+      }
+      if (time > data.max_latency) {
+	data.max_latency = time;
+      }
+      data.total_latency += time;
+      ++(data.freq_map[time / increment]);
+      if (data.freq_map[time / increment] > data.mode.second) {
+	  data.mode.first = time / increment;
+	data.mode.second = data.freq_map[time / increment];
+      }
     }
   }
 
@@ -1423,10 +1411,10 @@ void KvStoreTest::print_time_data() {
   cout << "\nNumber of sets of operations:\t" << ops;
   cout << "\nNumber of threads per op:\t" << clients;
   cout << "\nk:\t\t\t\t" << k;
-  cout << "\nprobability insertions: ." << (it++)->first;
-  cout << "\nprobability updates: ." << (it--)->first - ((it++)++)->first;
-  cout << "\nprobability deletes: ." << (it--)->first - ((it++)++)->first;
-  cout << "\nprobability reads: ." << (it--)->first - ((it++)++)->first;
+  cout << "\ncalls to set: " << kvs->opmap['s'];
+  cout << "\ncalls to remove: " << kvs->opmap['r'];
+  cout << "\ncalls to split: ." << kvs->opmap['l'];
+  cout << "\ncalls to rebalance: ." << kvs->opmap['m'];
   cout << "\n";
   cout << "\n";
   cout << "Average latency:\t" << data.avg_latency;
@@ -1455,6 +1443,8 @@ void KvStoreTest::print_time_data() {
   }*/
   cout << "========================================================"
        << std::endl;
+
+  kvs->print_time_data();
 }
 
 int main(int argc, const char** argv) {

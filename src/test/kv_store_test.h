@@ -9,7 +9,8 @@
 
 #include "key_value_store/key_value_structure.h"
 #include "key_value_store/kv_flat_btree_async.h"
-#include "include/rados/librados.hpp"
+#include "common/Clock.h"
+#include "global/global_context.h"
 
 #include <string>
 #include <climits>
@@ -18,17 +19,6 @@
 
 using namespace std;
 using ceph::bufferlist;
-
-class StopWatch {
-protected:
-  utime_t begin_time;
-  utime_t end_time;
-public:
-  void start_time();
-  void stop_time();
-  double get_time();
-  void clear();
-};
 
 struct set_args {
   KeyValueStructure * kvs;
@@ -48,6 +38,24 @@ struct kv_bench_datum {
   char op;
 };
 
+struct StopWatch {
+  utime_t begin_time;
+  utime_t end_time;
+
+  void start_time() {
+    begin_time = ceph_clock_now(g_ceph_context);
+  }
+  void stop_time() {
+    end_time = ceph_clock_now(g_ceph_context);
+  }
+  double get_time() {
+    return (end_time - begin_time) * 1000;
+  }
+  void clear() {
+    begin_time = end_time = utime_t();
+  }
+};
+
 struct kv_bench_data {
   double avg_latency;
   double min_latency;
@@ -55,13 +63,34 @@ struct kv_bench_data {
   double total_latency;
   int started_ops;
   int completed_ops;
-  std::map<int,int> freq_map;
-  pair<int,int> mode;
+  std::map<uint64_t,uint64_t> freq_map;
+  pair<uint64_t,uint64_t> mode;
   kv_bench_data()
   : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
     total_latency(0.0),
     started_ops(0), completed_ops(0)
   {}
+};
+
+struct latency_breakdown {
+  StopWatch sw;
+  kv_bench_data data;
+
+  void flush() {
+    sw.stop_time();
+    double time = sw.get_time();
+    sw.clear();
+    data.avg_latency = (data.avg_latency * data.completed_ops + time)
+	  / (data.completed_ops + 1);
+    data.completed_ops++;
+    if (time < data.min_latency) {
+	data.min_latency = time;
+    }
+    if (time > data.max_latency) {
+	data.max_latency = time;
+    }
+    data.total_latency += time;
+  }
 };
 
 class KvStoreTest;
