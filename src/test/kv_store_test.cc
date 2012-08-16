@@ -1289,28 +1289,6 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       }
       break;
     }
-
-    if (i > ops / 10) {
-      double time = sw.get_time();
-      sw.clear();
-      d.latency = time;
-      datums.push_back(d);
-      data.avg_latency = (data.avg_latency * data.completed_ops + time)
-	  / (data.completed_ops + 1);
-      data.completed_ops++;
-      if (time < data.min_latency) {
-	data.min_latency = time;
-      }
-      if (time > data.max_latency) {
-	data.max_latency = time;
-      }
-      data.total_latency += time;
-      ++(data.freq_map[time / increment]);
-      if (data.freq_map[time / increment] > data.mode.second) {
-	  data.mode.first = time / increment;
-	data.mode.second = data.freq_map[time / increment];
-      }
-    }
   }
 
   for(vector<kv_bench_datum>::iterator it = datums.begin(); it != datums.end();
