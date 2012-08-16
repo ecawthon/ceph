@@ -1444,7 +1444,7 @@ void KvStoreTest::print_time_data() {
   cout << "========================================================"
        << std::endl;
 
-  kvs->print_time_data();
+  //kvs->print_time_data();
 }
 
 int main(int argc, const char** argv) {
