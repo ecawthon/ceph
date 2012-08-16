@@ -23,6 +23,7 @@ typedef int (KeyValueStructure::*injection_t)();
 
 class KeyValueStructure{
 public:
+  map<char, int> opmap;
   /**
    * returns 0
    */
@@ -135,6 +136,8 @@ public:
    * prints a string representation of the structure
    */
   virtual string str() = 0;
+
+  virtual void print_time_data() = 0;
 
 };
 

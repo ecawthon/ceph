@@ -29,6 +29,15 @@ cls_method_handle_t h_omap_remove;
 cls_method_handle_t h_maybe_read_for_balance;
 
 
+void print_time_data(map<string, latency_breakdown> &latency_map) {
+  map<string, latency_breakdown>::iterator it = latency_map.begin();
+  for (it = latency_map.begin(); it != latency_map.end(); ++it) {
+    CLS_LOG(20, "latency data: %s\t%f\t%f\t%f\t%f", it->first.c_str(),
+	it->second.data.avg_latency,  it->second.data.min_latency,
+	it->second.data.max_latency, it->second.data.total_latency);
+  }
+}
+
 /**
  * finds the index_data where a key belongs.
  *
@@ -306,19 +315,27 @@ static int assert_size_in_bound_op(cls_method_context_t hctx,
  */
 static int omap_insert(cls_method_context_t hctx,
     const map<string, bufferlist> &omap, int bound, bool exclusive) {
-
+  map<string, latency_breakdown> time;
+  //time["log"].sw.start_time();
   CLS_LOG(20, "inserting %s", omap.begin()->first.c_str());
+  //time["log"].flush();
   //first make sure the object is writable
+  //time["check-xattr"].sw.start_time();
   int r = check_writable(hctx);
+  //time["check-xattr"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
     CLS_LOG(20, "omap_insert: this object is unwritable.", r);
+    //time["error"].flush();
     return r;
   }
+  //time["error"].flush();
 
   int assert_bound = bound;
 
   //if this is an exclusive insert, make sure the key doesn't already exist.
 
+  //time["check-existing"].sw.start_time();
   for (map<string, bufferlist>::const_iterator it = omap.begin();
       it != omap.end(); ++it) {
     bufferlist bl;
@@ -327,52 +344,78 @@ static int omap_insert(cls_method_context_t hctx,
       if (exclusive) {
 	CLS_LOG(20, "error: this is an exclusive insert and %s exists.",
 	    it->first.c_str());
+	  //time["check-existing"].flush();
 	return -EEXIST;
       }
       assert_bound++;
       CLS_LOG(20, "increased assert_bound to %d", assert_bound);
     } else if (r != -ENODATA && r != -ENOENT) {
       CLS_LOG(20, "error reading omap val for %s: %d", it->first.c_str(), r);
+      //time["check-existing"].flush();
       return r;
     }
   }
+  //time["check-existing"].flush();
 
   r = 0;
 
-  CLS_LOG(20, "asserting size is less than %d (bound is %d)", assert_bound, bound);
-  r = assert_size_in_bound(hctx, assert_bound, CEPH_OSD_CMPXATTR_OP_LT);
-  if (r < 0) {
-    CLS_LOG(20, "error on size (e.g. not in bound): %d", r);
-    return r;
-  }
 
   bufferlist old_size;
+  //time["check-xattr"].sw.start_time();
   r = cls_cxx_getxattr(hctx, "size", &old_size);
+  //time["check-xattr"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
     CLS_LOG(20, "error reading xattr %s: %d", "size", r);
+    //time["error"].flush();
     return r;
   }
+  //time["error"].flush();
 
+  //time["check-size"].sw.start_time();
   int old_size_int = atoi(string(old_size.c_str(), old_size.length()).c_str());
+
+  CLS_LOG(20, "asserting size is less than %d (bound is %d)", assert_bound, bound);
+  if (old_size_int >= assert_bound) {
+//    time["check-size"].flush();
+    return -EKEYREJECTED;
+  }
+  //time["check-size"].flush();
+
+  //time["new-size"].sw.start_time();
   int new_size_int = old_size_int + omap.size() - (assert_bound - bound);
   CLS_LOG(20, "old size is %d, new size is %d", old_size_int, new_size_int);
   bufferlist new_size;
   stringstream s;
   s << new_size_int;
   new_size.append(s.str());
+  //time["new-size"].flush();
 
+  //time["set-vals"].sw.start_time();
   r = cls_cxx_map_set_vals(hctx, &omap);
+  //time["set-vals"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
     CLS_LOG(20, "error setting omap: %d", r);
+    //time["error"].flush();
     return r;
   }
+  //time["error"].flush();
 
+  //time["set-xattr"].sw.start_time();
   r = cls_cxx_setxattr(hctx, "size", &new_size);
+  //time["set-xattr"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
     CLS_LOG(20, "error setting xattr %s: %d", "size", r);
+    //time["error"].flush();
     return r;
   }
+  //time["error"].flush();
+  //time["log"].sw.start_time();
   CLS_LOG(20, "successfully inserted %s", omap.begin()->first.c_str());
+  //time["log"].flush();
+  //print_time_data(time);
   return 0;
 }
 
@@ -455,10 +498,11 @@ static int create_with_omap_op(cls_method_context_t hctx,
  */
 static int omap_remove(cls_method_context_t hctx,
     const std::set<string> omap, int bound) {
-
+  map<string, latency_breakdown> time;
   int r;
 
   //check for existance of the key first
+  //time["check-existing"].sw.start_time();
   for (set<string>::const_iterator it = omap.begin();
       it != omap.end(); ++it) {
     bufferlist bl;
@@ -471,40 +515,56 @@ static int omap_remove(cls_method_context_t hctx,
       return r;
     }
   }
+  //time["check-existing"].flush();
 
   //first make sure the object is writable
+  //time["check-xattr"].sw.start_time();
   r = check_writable(hctx);
+  //time["check-xattr"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
+    //time["error"].flush();
     return r;
   }
+  //time["error"].flush();
 
   //fail if removing from an object with only bound entries.
-  r = assert_size_in_bound(hctx, bound, CEPH_OSD_CMPXATTR_OP_GT);
-  if (r < 0) {
-    return r;
-  }
-
   bufferlist old_size;
   r = cls_cxx_getxattr(hctx, "size", &old_size);
   if (r < 0) {
-    CLS_LOG(20, "error reading xattr %s: %d", "unwritable", r);
+    CLS_LOG(20, "error reading xattr %s: %d", "size", r);
     return r;
   }
-
+  //time["check-size"].sw.start_time();
   int old_size_int = atoi(string(old_size.c_str(), old_size.length()).c_str());
+
+  CLS_LOG(20, "asserting size is greater than %d", bound);
+  if (old_size_int <= bound) {
+    //time["check-size"].flush();
+    return -EKEYREJECTED;
+  }
+  //time["check-size"].flush();
+
+  //time["new-size"].sw.start_time();
   int new_size_int = old_size_int - omap.size();
   CLS_LOG(20, "old size is %d, new size is %d", old_size_int, new_size_int);
   bufferlist new_size;
   stringstream s;
   s << new_size_int;
   new_size.append(s.str());
+  //time["new-size"].flush();
 
+  //time["set-xattr"].sw.start_time();
   r = cls_cxx_setxattr(hctx, "size", &new_size);
+  //time["set-xattr"].flush();
+  //time["error"].sw.start_time();
   if (r < 0) {
     CLS_LOG(20, "error setting xattr %s: %d", "unwritable", r);
+    //time["error"].flush();
     return r;
   }
 
+  //time["rm-vals"].sw.start_time();
   for (std::set<string>::const_iterator it = omap.begin();
       it != omap.end(); ++it) {
     r = cls_cxx_map_remove_key(hctx, *it);
@@ -513,7 +573,8 @@ static int omap_remove(cls_method_context_t hctx,
       return r;
     }
   }
-
+  //time["rm-vals"].flush();
+  //print_time_data(time);
   return 0;
 }
 
