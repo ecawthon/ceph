@@ -16,6 +16,7 @@
 #include "include/utime.h"
 #include "include/rados.h"
 #include "include/encoding.h"
+#include "include/rados/librados.hpp"
 #include <cfloat>
 #include <sstream>
 #include <stdarg.h>
@@ -258,6 +259,31 @@ WRITE_CLASS_ENCODER(object_data)
 
 };*/
 
+struct aio_set_args {
+  KeyValueStructure * kvs;
+  string key;
+  bufferlist val;
+  bool exc;
+  librados::callback_t cb;
+  void * cb_args;
+};
+
+struct aio_rm_args {
+  KeyValueStructure * kvs;
+  string key;
+  librados::callback_t cb;
+  void * cb_args;
+};
+
+struct aio_get_args {
+  KeyValueStructure * kvs;
+  string key;
+  bufferlist * val;
+  bool exc;
+  librados::callback_t cb;
+  void * cb_args;
+};
+
 class KvFlatBtreeAsync;
 
 class KvFlatBtreeAsync : public KeyValueStructure {
@@ -466,6 +492,11 @@ protected:
    */
   int cleanup(const index_data &idata, const int &errno);
 
+  static void* pset(void *ptr);
+
+  static void* prm(void *ptr);
+
+  static void* pget(void *ptr);
 public:
 
   /**
@@ -494,11 +525,11 @@ KvFlatBtreeAsync(int k_val, string name, int marg)
     index_name("index_object"),
     rados_id(name),
     client_name(string(name).append(".")),
-    client_index(0),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
+    TIMEOUT(100000,0),
     wait_index(1),
-    TIMEOUT(100000,0)
+    client_index(0)
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -506,13 +537,13 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     index_name("index_object"),
     rados_id(name),
     client_name(string(name).append(".")),
-    client_index(0),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     waits(wait_vector),
     wait_ms(1000),
+    TIMEOUT(1,0),
     wait_index(0),
-    TIMEOUT(1,0)
+    client_index(0)
   {}
 
   int handle_set_rm_errors(int &err, string key, string obj,
@@ -597,13 +628,15 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
 
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 
-/*
-  int aio_get(const string &key, bufferlist *val, callback_t cb);
 
-  int aio_set(const string &key, const bufferlist &val, callback_t cb);
+  int aio_get(const string &key, bufferlist *val, librados::callback_t cb,
+      void *cb_args);
 
-  int aio_remove(const string &key, callback_t cb);
-*/
+  int aio_set(const string &key, const bufferlist &val,
+      librados::callback_t cb, void * cb_args);
+
+  int aio_remove(const string &key, librados::callback_t cb, void *cb_args);
+
 
 };
 

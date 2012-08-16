@@ -315,7 +315,6 @@ static int assert_size_in_bound_op(cls_method_context_t hctx,
  */
 static int omap_insert(cls_method_context_t hctx,
     const map<string, bufferlist> &omap, int bound, bool exclusive) {
-  map<string, latency_breakdown> time;
   //time["log"].sw.start_time();
   CLS_LOG(20, "inserting %s", omap.begin()->first.c_str());
   //time["log"].flush();
@@ -498,7 +497,6 @@ static int create_with_omap_op(cls_method_context_t hctx,
  */
 static int omap_remove(cls_method_context_t hctx,
     const std::set<string> omap, int bound) {
-  map<string, latency_breakdown> time;
   int r;
 
   //check for existance of the key first

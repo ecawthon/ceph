@@ -1390,16 +1390,62 @@ int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
   return err;
 }
 
-/*int KvFlatBtreeAsync::aio_get(const string &key, bufferlist *val,
-    callback_t cb) {
-  set_args args;
+void *KvFlatBtreeAsync::pset(void *ptr) {
+  struct aio_set_args *args = (struct set_args *)ptr;
+  args->kvs->set((string)args->key, (bufferlist)args->val, (bool)args->exc);
+  args->kvs->cb(cb_args);
+}
+
+int KvFlatBtreeAsync::aio_set(const string &key, bufferlist &val,
+    bool exclusive, callback_t cb, void * cb_args) {
+  aio_set_args args;
   args.kvs = this;
   args.key = key;
   args.val = val;
+  args.exc = exc;
+  args.cb = cb;
+  args.cb_args = cb_args;
   pthread_t t;
   int err = pthread_create(&t, NULL, pset, (void*)args);
+  pthread_detach(t);
+}
 
-}*/
+void *KvFlatBtreeAsync::prm(void *ptr) {
+  struct aio_rm_args *args = (struct aio_rm_args *)ptr;
+  args->kvs->remove((string)args->key);
+  args->kvs->cb(cb_args);
+}
+
+int KvFlatBtreeAsync::aio_remove(const string &key,
+    callback_t cb, void * cb_args) {
+  aio_rm_args args;
+  args.kvs = this;
+  args.key = key;
+  args.cb = cb;
+  args.cb_args = cb_args;
+  pthread_t t;
+  int err = pthread_create(&t, NULL, prm, (void*)args);
+  pthread_detach(t);
+}
+
+void *KvFlatBtreeAsync::pget(void *ptr) {
+  struct set_args *args = (struct set_args *)ptr;
+  args->kvs->get((string)args->key, (bufferlist)args->val);
+  args->kvs->cb(cb_args);
+}
+
+int KvFlatBtreeAsync::aio_get(const string &key, bufferlist *val,
+    callback_t cb, void * cb_args) {
+  aio_set_args args;
+  args.kvs = this;
+  args.key = key;
+  args.val = val;
+  args.cb = cb;
+  args.cb_args = cb_args;
+  pthread_t t;
+  int err = pthread_create(&t, NULL, pget, (void*)args);
+  pthread_detach(t);
+}
 
 int KvFlatBtreeAsync::remove_all() {
   cout << client_name << ": removing all" << std::endl;
