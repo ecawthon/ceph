@@ -1801,7 +1801,7 @@ string KvFlatBtreeAsync::str() {
   return ret.str();
 }
 
-void KvFlatBtreeAsync::print_time_data() {
+/*void KvFlatBtreeAsync::print_time_data() {
   map<string, latency_breakdown>::iterator it = latency_map.begin();
   for (it = latency_map.begin(); it != latency_map.end(); ++it) {
     cout << "========================================================\n";
@@ -1814,4 +1814,4 @@ void KvFlatBtreeAsync::print_time_data() {
     cout << "========================================================"
 	 << std::endl;
   }
-}
+}*/
