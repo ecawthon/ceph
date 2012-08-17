@@ -19,6 +19,7 @@
 #include "common/Mutex.h"
 #include "include/rados/librados.hpp"
 #include <cfloat>
+#include <queue>
 #include <sstream>
 #include <stdarg.h>
 
@@ -126,6 +127,10 @@ struct index_data {
   index_data(string raw_key)
   : kdata(raw_key)
   {}
+
+  bool operator<(const index_data &other) const {
+    return (kdata.encoded() < other.kdata.encoded());
+  }
 
   //true if there is a prefix and now - ts > timeout.
   bool is_timed_out(utime_t now, utime_t timeout) const;
@@ -250,6 +255,24 @@ struct object_data {
 };
 WRITE_CLASS_ENCODER(object_data)
 
+
+class IndexCache {
+protected:
+  set<index_data> imap;
+  queue<index_data> iq;
+  int cache_size;
+
+public:
+  IndexCache()
+  : cache_size(10)
+  {}
+  void push(const index_data &idata);//pops the last entry if necessary
+  void push(const map<string, bufferlist> &raw_map);
+  int get(const string &key, index_data *idata);
+//  int next(const index_data &idata, index_data * out_data);
+//  int prev(const index_data &idata, index_data * out_data);
+};
+
 /*struct AioOperation {
   int set_callback(void *cb_arg, callback_t cb);
   int wait_for_safe();
@@ -305,6 +328,8 @@ protected:
   vector<__useconds_t> waits;
   unsigned wait_ms;
   utime_t TIMEOUT;
+  IndexCache icache;
+  int cache_size;
 
   //don't use this with aio.
   int wait_index;
@@ -353,7 +378,7 @@ protected:
    * stored
    */
   int read_index(const string &key, index_data * idata,
-      index_data * next_idata);
+      index_data * next_idata, bool force_update);
 
   //These sometimes modify objects and the index
 
@@ -497,6 +522,16 @@ protected:
    */
   int cleanup(const index_data &idata, const int &errno);
 
+  int set_op(const string &key, const bufferlist &val,
+      bool update_on_existing, index_data &idata);
+
+  int remove_op(const string &key, index_data &idata, index_data &next_idata);
+
+  int get_op(const string &key, bufferlist * val, index_data &idata);
+
+  int handle_set_rm_errors(int &err, string key, string obj,
+      index_data * idata, index_data * next_idata);
+
   static void* pset(void *ptr);
 
   static void* prm(void *ptr);
@@ -533,6 +568,7 @@ KvFlatBtreeAsync(int k_val, string name, int marg)
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     TIMEOUT(100000,0),
+    cache_size(10),
     wait_index(1),
     client_index_lock("client_index_lock"),
     client_index(0)
@@ -552,9 +588,6 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     client_index_lock("client_index_lock"),
     client_index(0)
   {}
-
-  int handle_set_rm_errors(int &err, string key, string obj,
-      index_data * idata, index_data * next_idata, utime_t &mytime);
 
   /**
    * creates a string with an int at the end.
