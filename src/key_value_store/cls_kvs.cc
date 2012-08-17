@@ -29,15 +29,6 @@ cls_method_handle_t h_omap_remove;
 cls_method_handle_t h_maybe_read_for_balance;
 
 
-void print_time_data(map<string, latency_breakdown> &latency_map) {
-  map<string, latency_breakdown>::iterator it = latency_map.begin();
-  for (it = latency_map.begin(); it != latency_map.end(); ++it) {
-    CLS_LOG(20, "latency data: %s\t%f\t%f\t%f\t%f", it->first.c_str(),
-	it->second.data.avg_latency,  it->second.data.min_latency,
-	it->second.data.max_latency, it->second.data.total_latency);
-  }
-}
-
 /**
  * finds the index_data where a key belongs.
  *

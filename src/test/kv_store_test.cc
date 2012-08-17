@@ -30,7 +30,11 @@ KvStoreTest::KvStoreTest()
   val_size(7),
   inject('n'),
   kvs(NULL),
-  client_name("admin")
+  client_name("admin"),
+  ops_in_flight_lock("KvStoreTest::ops_in_flight_lock"),
+  data_lock("data lock"),
+  ops_in_flight(0),
+  max_ops_in_flight(8)
 {
   probs[25] = 'i';
   probs[50] = 'u';
@@ -55,7 +59,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
       } else if (strcmp(args[i], "--valsize") == 0) {
 	val_size = atoi(args[i+1]);
       } else if (strcmp(args[i], "-t") == 0) {
-	clients = atoi(args[i+1]);
+	max_ops_in_flight = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inc") == 0) {
 	increment = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inj") == 0) {
@@ -111,8 +115,8 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	   << "per key (default " << key_size << ")\n"
       	   << "	--valsize                              number of characters "
       	   << "per value (default " << val_size << ")\n"
-	   << " -t                                     the number of clients to"
-	   << " run at once for stress test. (default " << clients << ")\n"
+	   << " -t                                     the number of ops to"
+	   << " run at once. (default " << ops_in_flight << ")\n"
 	   << " -i                                     type of interruption "
 	   << "(default none, 'd' for death, 'w' <time> for wait time ms \n"
 	   << "                                        (default 1000))\n"
@@ -176,12 +180,12 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
-/*  librados::ObjectIterator it;
+  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
-  }*/
+  }
 
 
   int err = kvs->setup(argc, argv);
@@ -649,7 +653,7 @@ int KvStoreTest::test_non_random_insert_gets() {
 }
 
 int KvStoreTest::test_random_insertions() {
-  int err = 0;
+  int err[entries];
   vector<pair<string, bufferlist> > map_vector;
   for (int i = 0; i < entries; i++) {
     bufferlist bfr;
@@ -657,24 +661,98 @@ int KvStoreTest::test_random_insertions() {
     map_vector.push_back(pair<string,bufferlist>(random_string(5), bfr));
   }
   cout << "testing random insertions";
+
+  Mutex::Locker l(ops_in_flight_lock);
   for (int i = 0; i < entries; i++) {
+    assert(ops_in_flight <= max_ops_in_flight);
+    if (ops_in_flight == max_ops_in_flight) {
+      int err = op_avail.Wait(ops_in_flight_lock);
+      if (err < 0) {
+	assert(false);
+	return err;
+      }
+      assert(ops_in_flight < max_ops_in_flight);
+    }
     cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tinitial:" << i + 1
 	<< " / " << entries << std::endl;
     pair<string,bufferlist> this_pair = map_vector[i];
-    err = kvs->set(this_pair.first, this_pair.second, true);
-    if (err < 0) {
-      cout << "setting " << this_pair.first << " failed with " << err
-	  << std::endl;
-      return err;
-    }
+    ops_in_flight++;
+    kvs->aio_set(this_pair.first, this_pair.second, true,
+	aio_set_callback_not_timed, this, &err[i]);
 /*    if (!kvs->is_consistent()) {
       cout << "Random insertions failed - not consistent" << std::endl;
       return -EINCONSIST;
     }*/
   }
+  while(ops_in_flight > 0) {
+    op_avail.Wait(ops_in_flight_lock);
+  }
+  for (int i = 0; i < entries; i++) {
+    if (err[i] < 0) {
+      cout << "setting something failed with " << err << std::endl;
+      return err[i];
+    }
+  }
   cout << "random insertions successful" << std::endl;
 
-  return err;
+  return err[0];
+}
+
+void KvStoreTest::aio_set_callback_not_timed(int * err, void *arg) {
+  KvStoreTest *kvst = reinterpret_cast<KvStoreTest *>(arg);
+  Mutex * ops_in_flight_lock = &kvst->ops_in_flight_lock;
+  Cond * op_avail = &kvst->op_avail;
+  int *ops_in_flight = &kvst->ops_in_flight;
+  if (*err < 0) {
+    cerr << "Error during set operation: " << *err << std::endl;
+  }
+  ops_in_flight_lock->Lock();
+  (*ops_in_flight)--;
+  op_avail->Signal();
+  ops_in_flight_lock->Unlock();
+}
+
+void KvStoreTest::aio_set_callback_timed(int * err, void *arg) {
+  timed_args *args = reinterpret_cast<timed_args *>(arg);
+  Mutex * ops_in_flight_lock = &args->kvst->ops_in_flight_lock;
+  Mutex * data_lock = &args->kvst->data_lock;
+  Cond * op_avail = &args->kvst->op_avail;
+  int *ops_in_flight = &args->kvst->ops_in_flight;
+  if (*err < 0 && *err != -61) {
+    cerr << "Error during " << args->op << " operation: " << *err << std::endl;
+  }
+
+  data_lock->Lock();
+  args->sw.stop_time();
+  double time = args->sw.get_time();
+  args->sw.clear();
+  args->kvst->data.datums.push_back(make_pair(args->op, time));
+  args->kvst->data.avg_latency =
+      (args->kvst->data.avg_latency * args->kvst->data.completed_ops + time)
+	  / (args->kvst->data.completed_ops + 1);
+  args->kvst->data.completed_ops++;
+  if (time < args->kvst->data.min_latency) {
+	args->kvst->data.min_latency = time;
+  }
+  if (time > args->kvst->data.max_latency) {
+	args->kvst->data.max_latency = time;
+  }
+  args->kvst->data.total_latency += time;
+  ++(args->kvst->data.freq_map[time / args->kvst->increment]);
+  if (args->kvst->data.freq_map[time / args->kvst->increment] >
+      args->kvst->data.mode.second) {
+    args->kvst->data.mode.first = time / args->kvst->increment;
+    args->kvst->data.mode.second =
+	args->kvst->data.freq_map[time / args->kvst->increment];
+  }
+  data_lock->Unlock();
+
+  delete args;
+
+  ops_in_flight_lock->Lock();
+  (*ops_in_flight)--;
+  op_avail->Signal();
+  ops_in_flight_lock->Unlock();
 }
 
 int KvStoreTest::test_random_ops() {
@@ -1201,23 +1279,142 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   return err;
 }
 
-int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
+int KvStoreTest::test_teuthology_aio(next_gen_t distr,
+    const map<int, char> &probs)
 {
   int err = 0;
   err = test_random_insertions();
   if (err < 0) {
     return err;
   }
-  vector<kv_bench_datum> datums;
+
+  Mutex::Locker l(ops_in_flight_lock);
+  for (int i = 0; i < ops; i++) {
+    assert(ops_in_flight <= max_ops_in_flight);
+    if (ops_in_flight == max_ops_in_flight) {
+      int err = op_avail.Wait(ops_in_flight_lock);
+      if (err < 0) {
+	assert(false);
+	return err;
+      }
+      assert(ops_in_flight < max_ops_in_flight);
+    }
+    cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i + 1 << " / "
+	<< ops << std::endl;
+    timed_args * cb_args = new timed_args(this);
+    pair<string, bufferlist> kv;
+    int random = (rand() % 100);
+    cb_args->op = probs.lower_bound(random)->second;
+    switch (cb_args->op) {
+    case 'i':
+      kv = (((KvStoreTest *)this)->*distr)(true);
+      if (kv.first == "") {
+	i--;
+	continue;
+      }
+      ops_in_flight++;
+      cb_args->sw.start_time();
+      kvs->aio_set(kv.first, kv.second, false, aio_set_callback_timed,
+	  cb_args, &cb_args->err);
+/*      if (err < 0) {
+	cout << "Error setting " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error setting " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }*/
+      break;
+    case 'u':
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	i--;
+	continue;
+      }
+      ops_in_flight++;
+      cb_args->sw.start_time();
+      kvs->aio_set(kv.first, kv.second, true, aio_set_callback_timed,
+	  cb_args, &cb_args->err);
+/*      if (err < 0 && err != -61) {
+	cout << "Error updating " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error updating " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }*/
+      break;
+    case 'd':
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	i--;
+	continue;
+      }
+      key_map.erase(kv.first);
+      ops_in_flight++;
+      cb_args->sw.start_time();
+      kvs->aio_remove(kv.first, aio_set_callback_timed, cb_args, &cb_args->err);
+/*      if (err < 0 && err != -61) {
+	cout << "Error removing " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error removing " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }*/
+      break;
+    case 'r':
+      kv = (((KvStoreTest *)this)->*distr)(false);
+      if (kv.first == "") {
+	i--;
+	continue;
+      }
+      bufferlist val;
+      ops_in_flight++;
+      cb_args->sw.start_time();
+      kvs->aio_get(kv.first, &cb_args->val, aio_set_callback_timed,
+	  cb_args, &cb_args->err);
+/*      if (err < 0 && err != -61) {
+	cout << "Error getting " << kv << ": " << err << std::endl;
+	return err;
+      } else if (!kvs->is_consistent()) {
+	cout << "Error getting " << kv << ": not consistent!" << std::endl;
+	return -EINCONSIST;
+      }*/
+      break;
+    }
+
+  }
+
+  while(ops_in_flight > 0) {
+    op_avail.Wait(ops_in_flight_lock);
+  }
+
+  for(vector<pair<char, double> >::iterator it = data.datums.begin();
+      it != data.datums.end();
+      ++it) {
+    print_time_datum(&cout, *it);
+  }
+
+  print_time_data();
+  return err;
+}
+
+int KvStoreTest::test_teuthology_sync(next_gen_t distr,
+    const map<int, char> &probs)
+{
+  int err = 0;
+  err = test_random_insertions();
+  if (err < 0) {
+    return err;
+  }
+  sleep(10);
   for (int i = 0; i < ops; i++) {
     StopWatch sw;
-    kv_bench_datum d;
+    pair<char, double> d;
     cout << "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t" << i + 1 << " / "
 	<< ops << std::endl;
     pair<string, bufferlist> kv;
     int random = (rand() % 100);
-    d.op = probs.lower_bound(random)->second;
-    switch (d.op) {
+    d.first = probs.lower_bound(random)->second;
+    switch (d.first) {
     case 'i':
       kv = (((KvStoreTest *)this)->*distr)(true);
       if (kv.first == "") {
@@ -1230,10 +1427,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      }/* else if (!kvs->is_consistent()) {
 	cout << "Error setting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'u':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1247,10 +1444,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error updating " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'd':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1265,10 +1462,10 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      } /*else if (!kvs->is_consistent()) {
 	cout << "Error removing " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
     case 'r':
       kv = (((KvStoreTest *)this)->*distr)(false);
@@ -1283,15 +1480,39 @@ int KvStoreTest::test_teuthology(next_gen_t distr, const map<int, char> &probs)
       if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
 	return err;
-      } else if (!kvs->is_consistent()) {
+      }/* else if (!kvs->is_consistent()) {
 	cout << "Error getting " << kv << ": not consistent!" << std::endl;
 	return -EINCONSIST;
-      }
+      }*/
       break;
+    }
+
+    double time = sw.get_time();
+    d.second = time;
+    sw.clear();
+    data.datums.push_back(d);
+    data.avg_latency =
+        (data.avg_latency * data.completed_ops + time)
+  	  / (data.completed_ops + 1);
+    data.completed_ops++;
+    if (time < data.min_latency) {
+  	data.min_latency = time;
+    }
+    if (time > data.max_latency) {
+  	data.max_latency = time;
+    }
+    data.total_latency += time;
+    ++(data.freq_map[time / increment]);
+    if (data.freq_map[time / increment] >
+        data.mode.second) {
+      data.mode.first = time / increment;
+      data.mode.second =
+  	data.freq_map[time / increment];
     }
   }
 
-  for(vector<kv_bench_datum>::iterator it = datums.begin(); it != datums.end();
+  for(vector<pair<char, double> >::iterator it = data.datums.begin();
+      it != data.datums.end();
       ++it) {
     print_time_datum(&cout, *it);
   }
@@ -1369,30 +1590,31 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
 
 int KvStoreTest::teuthology_tests() {
   int err = 0;
-  test_teuthology(&KvStoreTest::rand_distr, probs);
+  //test_teuthology_aio(&KvStoreTest::rand_distr, probs);
+  test_teuthology_sync(&KvStoreTest::rand_distr, probs);
   return err;
 }
 
-void KvStoreTest::print_time_datum(ostream * s, kv_bench_datum d) {
-  (*s) << d.op;
-  if (d.op == 'i') cout << "\t";
-  if (d.op == 'd') cout << "\t\t";
-  if (d.op == 'r') cout << "\t\t\t";
-  if (d.op == 'u') cout << "\t\t\t\t";
-  cout << "\t" << d.latency << std::endl;
+void KvStoreTest::print_time_datum(ostream * s, pair<char, double> d) {
+  (*s) << d.first;
+  if (d.first == 'i') cout << "\t";
+  if (d.first == 'd') cout << "\t\t";
+  if (d.first == 'r') cout << "\t\t\t";
+  if (d.first == 'u') cout << "\t\t\t\t";
+  cout << "\t" << d.second << std::endl;
 }
 
 void KvStoreTest::print_time_data() {
-  map<int, char>::iterator it = probs.begin();
+  //map<int, char>::iterator it = probs.begin();
   cout << "========================================================";
   cout << "\nNumber of initial entries:\t" << entries;
-  cout << "\nNumber of sets of operations:\t" << ops;
+  cout << "\nNumber of operations:\t" << data.datums.size();
   cout << "\nNumber of threads per op:\t" << clients;
-  cout << "\nk:\t\t\t\t" << k;
+  cout << "\nk:\t\t\t\t" << k;/*
   cout << "\ncalls to set: " << kvs->opmap['s'];
   cout << "\ncalls to remove: " << kvs->opmap['r'];
   cout << "\ncalls to split: ." << kvs->opmap['l'];
-  cout << "\ncalls to rebalance: ." << kvs->opmap['m'];
+  cout << "\ncalls to rebalance: ." << kvs->opmap['m'];*/
   cout << "\n";
   cout << "\n";
   cout << "Average latency:\t" << data.avg_latency;
