@@ -1623,7 +1623,8 @@ void KvStoreTest::print_time_data() {
   cout << "ms\nMode latency:\t\t" << "between " << data.mode.first * increment;
   cout << " and " << data.mode.first * increment + increment;
   cout << "ms\nTotal latency:\t\t" << data.total_latency;
-  cout << "ms\n";
+  cout << "ms\nAggregate throughput:\t\t" << ops / data.total_latency * 1000;
+  cout << "ops/s\n";
   //return;
 /*  cout << "\nHistogram: " << std::endl;
   for(int i = floor(data.min_latency / increment); i <
