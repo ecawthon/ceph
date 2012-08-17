@@ -20,6 +20,7 @@ using ceph::bufferlist;
 class KeyValueStructure;
 
 typedef int (KeyValueStructure::*injection_t)();
+typedef void (*callback)(int * err, void *arg);
 
 class KeyValueStructure{
 public:
@@ -98,6 +99,15 @@ public:
    * stores all keys and values in kv_map. map should put them in order by key.
    */
   virtual int get_all_keys_and_values(map<string,bufferlist> *kv_map) = 0;
+
+  virtual void aio_get(const string &key, bufferlist *val, callback cb,
+      void *cb_args, int * err) = 0;
+
+  virtual void aio_set(const string &key, const bufferlist &val, bool exclusive,
+      callback cb, void * cb_args, int * err) = 0;
+
+  virtual void aio_remove(const string &key, callback cb, void *cb_args,
+      int * err) = 0;
 
   /**
    * gets keys starting at min_key and ending after max_key or after max_keys
