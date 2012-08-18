@@ -34,29 +34,57 @@ bool index_data::is_timed_out(utime_t now, utime_t timeout) const {
   return prefix != "" && now - ts > timeout;
 }
 
-void IndexCache::push(const index_data &idata) {
-  imap.insert(idata);
-  iq.push(idata);
-  if ((int)imap.size() > cache_size) {
-    index_data i = iq.front();
-    iq.pop();
-    imap.erase(i);
+void IndexCache::push(const string &key, const index_data &idata,
+    const utime_t &time) {
+//TODO: make index vals store ranges so that stale indexes don't result in
+  //bad writes
+  index_data old_idata;
+  int err = get(key, &old_idata);
+  if (err != -ENODATA) {
+    utime_t old_time = k2itmap[old_idata.kdata].second;
+    t2kmap.erase(old_time);
+    k2itmap.erase(old_idata.kdata);
+  }
+  k2itmap[idata.kdata] = make_pair(idata, time);
+  t2kmap[time] = idata.kdata;
+
+  if ((int)k2itmap.size() > cache_size) {
+    pop();
   }
 }
 
+void IndexCache::pop() {
+  map<utime_t, key_data>::reverse_iterator it = t2kmap.rbegin();
+  k2itmap.erase(it->second);
+  t2kmap.erase(it->first);
+}
+
 int IndexCache::get(const string &key, index_data *idata) {
-  set<index_data>::iterator it = imap.lower_bound(index_data(key));
-  if (it == imap.end()) {
+  map<key_data, pair<index_data, utime_t> >::iterator it =
+      k2itmap.lower_bound(key_data(key));
+  if (it == k2itmap.end()) {
     return -ENODATA;
   } else {
-    *idata = *it;
+    *idata = it->second.first;
   }
   return 0;
 }
 
-/*int IndexCache::next(const index_data &idata, index_data * outdata) {
-
-}*/
+int IndexCache::get(const string &key, index_data *idata,
+    index_data *next_idata) {
+  map<key_data, pair<index_data, utime_t> >::const_iterator it =
+      k2itmap.lower_bound(key_data(key));
+  if (it == k2itmap.end()) {
+    return -ENODATA;
+  } else {
+    *idata = it->second.first;
+    it++;
+    if (it != k2itmap.end()) {
+      *next_idata = it->second.first;
+    }
+  }
+  return 0;
+}
 
 int KvFlatBtreeAsync::nothing() {
   return 0;
@@ -148,14 +176,21 @@ int KvFlatBtreeAsync::prev(const index_data &idata, index_data * out_data) {
 int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     index_data * next_idata, bool force_update) {
   int err = 0;
-  cout << "\t" << client_name << "-read_index: getting index_data for " << key
-      << std::endl;
   if (!force_update) {
-    err = icache.get(key, idata);
+    cout << "\t" << client_name << "-read_index: getting index_data for " << key
+	<< " from cache" << std::endl;
+    if (next_idata != NULL) {
+      err = icache.get(key, idata, next_idata);
+    } else {
+      err = icache.get(key, idata);
+    }
+
     if (err == 0) {
       return err;
     }
   }
+  cout << "\t" << client_name << "-read_index: getting index_data for " << key
+      << " from object" << std::endl;
   librados::ObjectReadOperation oro;
   bufferlist raw_val;
   std::set<std::string> key_set;
@@ -164,9 +199,6 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
   std::map<std::string, bufferlist> dupmap;
   oro.omap_get_vals_by_keys(key_set, &dupmap, &err);
   oro.omap_get_vals(key_data(key).encoded(), cache_size / 5, &kvmap,&err);
-  if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
-    return -ESUICIDE;
-  }
   err = io_ctx.operate(index_name, &oro, NULL);
   utime_t mytime = ceph_clock_now(g_ceph_context);
   if (err < 0){
@@ -176,7 +208,8 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     return err;
   }
   kvmap.insert(dupmap.begin(), dupmap.end());
-  for (map<string, bufferlist>::iterator it = kvmap.begin(); it != kvmap.end();
+  for (map<string, bufferlist>::iterator it = ++kvmap.begin();
+      it != kvmap.end();
       ++it) {
     bufferlist bl = it->second;
     bufferlist::iterator blit = bl.begin();
@@ -185,25 +218,33 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     if (this_idata.is_timed_out(mytime, TIMEOUT)) {
       cout << client_name << " THINKS THE OTHER CLIENT DIED. (mytime is "
   	<< mytime.sec() << "." << mytime.usec() << ", idata.ts is "
-  	<< this_idata.ts.sec() << "." << this_idata.ts.usec() << ", it has been "
-  	  << (mytime - this_idata.ts).sec()
-  	  << '.' << (mytime - this_idata.ts).usec()
-  	  << ", timeout is " << TIMEOUT << ")" << std::endl;
+  	<< this_idata.ts.sec() << "." << this_idata.ts.usec()
+  	<< ", it has been " << (mytime - this_idata.ts).sec()
+	<< '.' << (mytime - this_idata.ts).usec()
+	<< ", timeout is " << TIMEOUT << ")" << std::endl;
       //the client died after deleting the object. clean up.
       if (cleanup(*idata, -EPREFIX) == -ESUICIDE) {
         return -ESUICIDE;
       }
       return read_index(key, idata, next_idata, force_update);
     }
-    icache.push(this_idata);
+    icache_lock.Lock();
+    icache.push(this_idata.kdata.raw_key, this_idata, mytime);
+    icache_lock.Unlock();
   }
   idata->kdata.parse(kvmap.begin()->first);
   bufferlist::iterator b = kvmap.begin()->second.begin();
   idata->decode(b);
+  icache_lock.Lock();
+  icache.push(key, *idata, mytime);
+  icache_lock.Unlock();
   if (next_idata != NULL && idata->kdata.prefix != "1") {
     next_idata->kdata.parse((++kvmap.begin())->first);
     bufferlist::iterator nb = (++kvmap.begin())->second.begin();
     next_idata->decode(nb);
+    icache_lock.Lock();
+    icache.push(key, *next_idata, mytime);
+    icache_lock.Unlock();
   }
   return err;
 }
@@ -1194,14 +1235,14 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
             << std::endl;
         err = split(idata);
         if (err < 0 && err != -ENOENT && err != -EBALANCE) {
-	  int ret = handle_set_rm_errors(err, key, idata.obj, &idata, NULL);
+	  int ret = handle_set_rm_errors(err, idata.obj, key, &idata, NULL);
 	  switch (ret) {
 	  case -ESUICIDE:
 	    cout << client_name << " IS SUICIDING!" << std::endl;
 	    return ret;
 	    break;
 	  case 1:
-	    return set(key, val, update_on_existing);
+	    return set_op(key, val, update_on_existing, idata);
 	    break;
 	  default:
 	    if (ret == err) {
@@ -1211,6 +1252,12 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
 	  }
         }
       } while (err < 0 && err != -EBALANCE && err != -ENOENT);
+      err = read_index(key, &idata, NULL, true);
+      if (err < 0) {
+	cout << "\t" << client_name << ": getting oid failed with code "
+	    << err << std::endl;
+	return err;
+      }
       return set(key, val, update_on_existing);
       break;
     }
@@ -1297,7 +1344,7 @@ int KvFlatBtreeAsync::remove_op(const string &key, index_data &idata,
         if (err < 0 && err != -ENOENT && err != -EBALANCE) {
           cout << "\t" << client_name << ": rebalance returned " << err
               << std::endl;
-          int ret = handle_set_rm_errors(err, key, idata.obj, &idata,
+          int ret = handle_set_rm_errors(err, idata.obj, key, &idata,
               &next_idata);
           switch (ret) {
           case -ESUICIDE:
@@ -1305,7 +1352,7 @@ int KvFlatBtreeAsync::remove_op(const string &key, index_data &idata,
             return err;
             break;
           case 1:
-            return remove(key);
+            return remove_op(key, idata, next_idata);
             break;
 	  default:
 	    if (ret == err) {
@@ -1315,6 +1362,12 @@ int KvFlatBtreeAsync::remove_op(const string &key, index_data &idata,
           }
         }
       } while (err < 0 && err != -EBALANCE && err != -ENOENT);
+      err = read_index(key, &idata, &next_idata, true);
+      if (err < 0) {
+	cout << "\t" << client_name << ": getting oid failed with code "
+	    << err << std::endl;
+	return err;
+      }
       return remove(key);
       break;
     }

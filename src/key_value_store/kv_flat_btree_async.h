@@ -59,8 +59,16 @@ struct key_data {
     raw_key == "" ? prefix = "1" : prefix = "0";
   }
 
-  bool operator!=(key_data k) {
+  bool operator==(key_data k) const {
+    return ((raw_key == k.raw_key) && (prefix == k.prefix));
+  }
+
+  bool operator!=(key_data k) const {
     return ((raw_key != k.raw_key) || (prefix != k.prefix));
+  }
+
+  bool operator<(key_data k) const {
+    return k.encoded() < this->encoded();
   }
 
   /**
@@ -258,17 +266,19 @@ WRITE_CLASS_ENCODER(object_data)
 
 class IndexCache {
 protected:
-  set<index_data> imap;
-  queue<index_data> iq;
+  map<key_data, pair<index_data, utime_t> > k2itmap;
+  map<utime_t, key_data> t2kmap;
   int cache_size;
 
 public:
   IndexCache()
-  : cache_size(10)
+  : cache_size(100)
   {}
-  void push(const index_data &idata);//pops the last entry if necessary
-  void push(const map<string, bufferlist> &raw_map);
+  //pops the last entry if necessary
+  void push(const string &key, const index_data &idata, const utime_t &time);
+  void pop();
   int get(const string &key, index_data *idata);
+  int get(const string &key, index_data *idata, index_data * next_idata);
 //  int next(const index_data &idata, index_data * out_data);
 //  int prev(const index_data &idata, index_data * out_data);
 };
@@ -337,6 +347,7 @@ protected:
 
   Mutex client_index_lock;
   int client_index;
+  Mutex icache_lock;
   friend struct index_data;
 
   //These read, but do not write, librados objects
@@ -409,8 +420,7 @@ protected:
    * -ECANCELED if the rebalance fails due to another thread (meaning rebalance
    * should be repeated)
    */
-  int rebalance(const index_data &idata1,
-      const index_data &next_idata);
+  int rebalance(const index_data &idata1, const index_data &next_idata);
 
   /**
    * performs an ObjectReadOperation to populate odata
@@ -563,7 +573,7 @@ public:
 KvFlatBtreeAsync(int k_val, string name, int marg)
   : k(k_val),
     index_name("index_object"),
-    rados_id(name),
+    rados_id("admin"),
     client_name(string(name).append(".")),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
@@ -571,7 +581,8 @@ KvFlatBtreeAsync(int k_val, string name, int marg)
     cache_size(10),
     wait_index(1),
     client_index_lock("client_index_lock"),
-    client_index(0)
+    client_index(0),
+    icache_lock("icache_lock")
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -586,7 +597,8 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     TIMEOUT(1,0),
     wait_index(0),
     client_index_lock("client_index_lock"),
-    client_index(0)
+    client_index(0),
+    icache_lock("icache_lock")
   {}
 
   /**
