@@ -25,7 +25,8 @@ KvStoreTest::KvStoreTest()
   entries(30),
   ops(100),
   clients(5),
-  increment(10),
+  uincrement(10),
+  increment(1),
   key_size(5),
   val_size(7),
   inject('n'),
@@ -34,7 +35,9 @@ KvStoreTest::KvStoreTest()
   ops_in_flight_lock("KvStoreTest::ops_in_flight_lock"),
   data_lock("data lock"),
   ops_in_flight(0),
-  max_ops_in_flight(8)
+  max_ops_in_flight(8),
+  ops_count_lock("ops_count_lock"),
+  ops_count(0)
 {
   probs[25] = 'i';
   probs[50] = 'u';
@@ -61,7 +64,7 @@ int KvStoreTest::setup(int argc, const char** argv) {
       } else if (strcmp(args[i], "-t") == 0) {
 	max_ops_in_flight = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inc") == 0) {
-	increment = atoi(args[i+1]);
+	uincrement = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inj") == 0) {
 	if(strcmp("d",args[i+1]) == 0) {
 	  inject = 's';
@@ -180,12 +183,12 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
-  librados::ObjectIterator it;
+/*  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
-  }
+  }*/
 
 
   int err = kvs->setup(argc, argv);
@@ -722,15 +725,16 @@ void KvStoreTest::aio_set_callback_timed(int * err, void *arg) {
     cerr << "Error during " << args->op << " operation: " << *err << std::endl;
   }
 
-  data_lock->Lock();
   args->sw.stop_time();
   double time = args->sw.get_time();
   args->sw.clear();
-  args->kvst->data.datums.push_back(make_pair(args->op, time));
+
+  data_lock->Lock();
+  //latency
+  args->kvst->data.latency_datums.push_back(make_pair(args->op, time));
   args->kvst->data.avg_latency =
       (args->kvst->data.avg_latency * args->kvst->data.completed_ops + time)
 	  / (args->kvst->data.completed_ops + 1);
-  args->kvst->data.completed_ops++;
   if (time < args->kvst->data.min_latency) {
 	args->kvst->data.min_latency = time;
   }
@@ -738,13 +742,18 @@ void KvStoreTest::aio_set_callback_timed(int * err, void *arg) {
 	args->kvst->data.max_latency = time;
   }
   args->kvst->data.total_latency += time;
-  ++(args->kvst->data.freq_map[time / args->kvst->increment]);
-  if (args->kvst->data.freq_map[time / args->kvst->increment] >
-      args->kvst->data.mode.second) {
-    args->kvst->data.mode.first = time / args->kvst->increment;
-    args->kvst->data.mode.second =
-	args->kvst->data.freq_map[time / args->kvst->increment];
+  ++(args->kvst->data.freq_map[time / args->kvst->uincrement]);
+  if (args->kvst->data.freq_map[time / args->kvst->uincrement] >
+      args->kvst->data.mode_latency.second) {
+    args->kvst->data.mode_latency.first = time / args->kvst->uincrement;
+    args->kvst->data.mode_latency.second =
+	args->kvst->data.freq_map[time / args->kvst->uincrement];
   }
+
+  //throughput
+  args->kvst->data.it->second++;
+  args->kvst->data.completed_ops++;
+
   data_lock->Unlock();
 
   delete args;
@@ -753,6 +762,11 @@ void KvStoreTest::aio_set_callback_timed(int * err, void *arg) {
   (*ops_in_flight)--;
   op_avail->Signal();
   ops_in_flight_lock->Unlock();
+
+
+  args->kvst->ops_count_lock.Lock();
+  args->kvst->ops_count++;
+  args->kvst->ops_count_lock.Unlock();
 }
 
 int KvStoreTest::test_random_ops() {
@@ -1258,10 +1272,10 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
         data.max_latency = time;
       }
       data.total_latency += time;
-      ++(data.freq_map[time / increment]);
-      if (data.freq_map[time / increment] > data.mode.second) {
-	data.mode.first = time / increment;
-        data.mode.second = data.freq_map[time / increment];
+      ++(data.freq_map[time / uincrement]);
+      if (data.freq_map[time / uincrement] > data.mode_latency.second) {
+	data.mode_latency.first = time / uincrement;
+        data.mode_latency.second = data.freq_map[time / uincrement];
       }
     }
     if (!kvs->is_consistent()) {
@@ -1279,6 +1293,38 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   return err;
 }
 
+void *KvStoreTest::throughput_counter(void * arg) {
+  KvStoreTest * kvst = reinterpret_cast<KvStoreTest *>(arg);
+  Mutex * ops_count_lock = &kvst->ops_count_lock;
+  Mutex * data_lock = &kvst->data_lock;
+  while (true) {
+    usleep(kvst->increment);
+    data_lock->Lock();
+    kvst->data.avg_throughput =
+        (kvst->data.avg_throughput * kvst->data.it->first
+            + kvst->data.it->second)
+  		  / (kvst->data.it->second);
+    if (kvst->data.min_throughput > kvst->data.it->second) {
+      kvst->data.min_throughput = kvst->data.it->second;
+    }
+    if (kvst->data.max_throughput < kvst->data.it->second) {
+      kvst->data.max_throughput = kvst->data.it->second;
+    }
+    if (kvst->data.it->second > kvst->data.mode_throughput.second) {
+      kvst->data.mode_throughput = *kvst->data.it;
+    }
+    kvst->data.it++;
+    data_lock->Unlock();
+
+    ops_count_lock->Lock();
+    if (kvst->ops_count < kvst->entries) {
+      break;
+    }
+    ops_count_lock->Unlock();
+  }
+  return NULL;
+}
+
 int KvStoreTest::test_teuthology_aio(next_gen_t distr,
     const map<int, char> &probs)
 {
@@ -1287,6 +1333,10 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
   if (err < 0) {
     return err;
   }
+
+  sleep(10);
+  pthread_t throughput;
+  pthread_create(&throughput, NULL, throughput_counter, this);
 
   Mutex::Locker l(ops_in_flight_lock);
   for (int i = 0; i < ops; i++) {
@@ -1380,15 +1430,16 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
       }*/
       break;
     }
-
   }
 
   while(ops_in_flight > 0) {
     op_avail.Wait(ops_in_flight_lock);
   }
 
-  for(vector<pair<char, double> >::iterator it = data.datums.begin();
-      it != data.datums.end();
+  pthread_join(throughput, (void**)&err);
+
+  for(vector<pair<char, double> >::iterator it = data.latency_datums.begin();
+      it != data.latency_datums.end();
       ++it) {
     print_time_datum(&cout, *it);
   }
@@ -1490,7 +1541,7 @@ int KvStoreTest::test_teuthology_sync(next_gen_t distr,
     double time = sw.get_time();
     d.second = time;
     sw.clear();
-    data.datums.push_back(d);
+    data.latency_datums.push_back(d);
     data.avg_latency =
         (data.avg_latency * data.completed_ops + time)
   	  / (data.completed_ops + 1);
@@ -1503,16 +1554,16 @@ int KvStoreTest::test_teuthology_sync(next_gen_t distr,
     }
     data.total_latency += time;
     ++(data.freq_map[time / increment]);
-    if (data.freq_map[time / increment] >
-        data.mode.second) {
-      data.mode.first = time / increment;
-      data.mode.second =
-  	data.freq_map[time / increment];
+    if (data.freq_map[time / uincrement] >
+        data.mode_latency.second) {
+      data.mode_latency.first = time / uincrement;
+      data.mode_latency.second =
+  	data.freq_map[time / uincrement];
     }
   }
 
-  for(vector<pair<char, double> >::iterator it = data.datums.begin();
-      it != data.datums.end();
+  for(vector<pair<char, double> >::iterator it = data.latency_datums.begin();
+      it != data.latency_datums.end();
       ++it) {
     print_time_datum(&cout, *it);
   }
@@ -1608,7 +1659,7 @@ void KvStoreTest::print_time_data() {
   //map<int, char>::iterator it = probs.begin();
   cout << "========================================================";
   cout << "\nNumber of initial entries:\t" << entries;
-  cout << "\nNumber of operations:\t" << data.datums.size();
+  cout << "\nNumber of operations:\t" << data.latency_datums.size();
   cout << "\nNumber of threads per op:\t" << clients;
   cout << "\nk:\t\t\t\t" << k;/*
   cout << "\ncalls to set: " << kvs->opmap['s'];
@@ -1620,16 +1671,21 @@ void KvStoreTest::print_time_data() {
   cout << "Average latency:\t" << data.avg_latency;
   cout << "ms\nMinimum latency:\t" << data.min_latency;
   cout << "ms\nMaximum latency:\t" << data.max_latency;
-  cout << "ms\nMode latency:\t\t" << "between " << data.mode.first * increment;
-  cout << " and " << data.mode.first * increment + increment;
+  cout << "ms\nMode latency:\t\t" << "between "
+      << data.mode_latency.first * uincrement;
+  cout << " and " << data.mode_latency.first * uincrement + uincrement;
   cout << "ms\nTotal latency:\t\t" << data.total_latency;
-  cout << "ms\nAggregate throughput:\t\t" << ops / data.total_latency * 1000;
-  cout << "ops/s\n";
+  cout << "ms\n\nAverage throughput:\t\t" << data.avg_throughput;
+  cout << "ops/" << increment;
+  cout << "s\nMinimum throughput:\t" << data.min_throughput;
+  cout << "ops/" << increment;
+  cout << "s\nMaximum throughput:\t" << data.max_throughput;
+  cout << "ops/" << increment;
   //return;
 /*  cout << "\nHistogram: " << std::endl;
-  for(int i = floor(data.min_latency / increment); i <
-      ceil(data.max_latency / increment); i++) {
-    cout << ">= "<< i * increment << "ms";
+  for(int i = floor(data.min_latency / uincrement); i <
+      ceil(data.max_latency / uincrement); i++) {
+    cout << ">= "<< i * uincrement << "ms";
     int spaces;
     if (i == 0) spaces = 5;
     else spaces = 3 - floor(log10(i));
@@ -1642,7 +1698,7 @@ void KvStoreTest::print_time_data() {
     }
     cout << std::endl;
   }*/
-  cout << "========================================================"
+  cout << "\n========================================================"
        << std::endl;
 
   //kvs->print_time_data();

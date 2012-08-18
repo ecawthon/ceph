@@ -306,12 +306,19 @@ static int assert_size_in_bound_op(cls_method_context_t hctx,
  */
 static int omap_insert(cls_method_context_t hctx,
     const map<string, bufferlist> &omap, int bound, bool exclusive) {
+
+  uint64_t size;
+  time_t time;
+  int r = cls_cxx_stat(hctx, &size, &time);
+  if (r < 0) {
+    return r;
+  }
   //time["log"].sw.start_time();
   CLS_LOG(20, "inserting %s", omap.begin()->first.c_str());
   //time["log"].flush();
   //first make sure the object is writable
   //time["check-xattr"].sw.start_time();
-  int r = check_writable(hctx);
+  r = check_writable(hctx);
   //time["check-xattr"].flush();
   //time["error"].sw.start_time();
   if (r < 0) {
@@ -487,8 +494,14 @@ static int create_with_omap_op(cls_method_context_t hctx,
  * @post: object has omap entries removed, and size xattr is updated
  */
 static int omap_remove(cls_method_context_t hctx,
-    const std::set<string> omap, int bound) {
+    const std::set<string> &omap, int bound) {
   int r;
+  uint64_t size;
+  time_t time;
+  r = cls_cxx_stat(hctx, &size, &time);
+  if (r < 0) {
+    return r;
+  }
 
   //check for existance of the key first
   //time["check-existing"].sw.start_time();

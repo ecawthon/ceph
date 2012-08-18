@@ -54,6 +54,7 @@ struct rm_args {
 };
 
 struct kv_bench_data {
+  //latency
   double avg_latency;
   double min_latency;
   double max_latency;
@@ -61,12 +62,22 @@ struct kv_bench_data {
   int started_ops;
   int completed_ops;
   std::map<uint64_t,uint64_t> freq_map;
-  pair<uint64_t,uint64_t> mode;
-  vector<pair<char, double> > datums;
+  pair<uint64_t,uint64_t> mode_latency;
+  vector<pair<char, double> > latency_datums;
+
+  //throughput
+  double avg_throughput;
+  double min_throughput;
+  double max_throughput;
+  std::map<uint64_t, uint64_t> interval_to_ops_map;
+  std::map<uint64_t, uint64_t>::iterator it;
+  pair<uint64_t,uint64_t> mode_throughput;
   kv_bench_data()
   : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
     total_latency(0.0),
-    started_ops(0), completed_ops(0)
+    started_ops(0), completed_ops(0),
+    avg_throughput(0.0), min_throughput(DBL_MAX), max_throughput(0.0),
+    it(interval_to_ops_map.begin())
   {}
 };
 
@@ -102,7 +113,8 @@ protected:
   int entries;
   int ops;
   int clients;
-  double increment;
+  double uincrement;
+  int increment;
   int key_size;
   int val_size;
   map<int, char> probs;
@@ -116,6 +128,8 @@ protected:
   Mutex data_lock;
   int ops_in_flight;
   int max_ops_in_flight;
+  Mutex ops_count_lock;
+  int ops_count;
 
   /*
    * rados_id	op_char	latency
@@ -136,6 +150,8 @@ protected:
    * called by concurrent tests to run and time a remove operation
    */
   static void *prm(void *ptr);
+
+  static void *throughput_counter(void * arg);
 
 
 public:
