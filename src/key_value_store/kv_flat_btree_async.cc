@@ -76,6 +76,9 @@ int IndexCache::get(const string &key, index_data *idata,
       k2itmap.lower_bound(key_data(key));
   if (it == k2itmap.end()) {
     return -ENODATA;
+  } else if (it->second.first.min_kdata > key_data(key)){
+    //stale, should be reread.
+    return -ENODATA;
   } else {
     *idata = it->second.first;
     it++;
@@ -189,6 +192,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
       return err;
     }
   }
+
   cout << "\t" << client_name << "-read_index: getting index_data for " << key
       << " from object" << std::endl;
   librados::ObjectReadOperation oro;
@@ -261,7 +265,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   args.bound = 2 * k - 1;
   args.comparator = CEPH_OSD_CMPXATTR_OP_GT;
   err = read_object(idata.obj, &args);
-  args.odata.kdata = idata.kdata;
+  args.odata.max_kdata = idata.kdata;
   if (err < 0) {
     cout << "\t\t" << client_name << "-split: read object got " << err
 	<< std::endl;
@@ -276,7 +280,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   //for prefix index
   vector<object_data> to_create;
   vector<object_data> to_delete;
-  to_delete.push_back(object_data(args.odata.kdata, args.odata.name));
+  to_delete.push_back(object_data(args.odata.max_kdata, args.odata.name));
   to_delete[0].version = args.odata.version;
 
   //for lower half object
@@ -288,12 +292,12 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
     to_create[0].omap.insert(*it);
     it++;
   }
-  to_create[0].kdata = key_data(to_create[0].omap.rbegin()->first);
+  to_create[0].max_kdata = key_data(to_create[0].omap.rbegin()->first);
 
   //for upper half object
   client_index_lock.Lock();
   to_create.push_back(object_data(
-        args.odata.kdata,
+        args.odata.max_kdata,
         to_string(client_name, client_index++)));
   client_index_lock.Unlock();
   to_create[1].omap.insert(
@@ -365,7 +369,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       }
       return err;
     }
-    args2.odata.kdata = idata1.kdata;
+    args2.odata.max_kdata = idata1.kdata;
 
     //read the second object
     args1.bound = 2 * k + 1;
@@ -374,7 +378,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       cout << "reading " << idata1.obj << " failed with " << err << std::endl;
       return err;
     }
-    args1.odata.kdata = idata2.kdata;
+    args1.odata.max_kdata = idata2.kdata;
 
     cout << "\t\t" << client_name << "-rebalance: read " << idata2.obj
         << ". size: " << args1.odata.size << " version: " << args1.odata.version
@@ -387,7 +391,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       cout << "reading " << idata1.obj << " failed with " << err << std::endl;
       return err;
     }
-    args1.odata.kdata = idata1.kdata;
+    args1.odata.max_kdata = idata1.kdata;
 
     args2.bound = 2 * k + 1;
     err = read_object(idata2.obj, &args2);
@@ -398,7 +402,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       }
       return err;
     }
-    args2.odata.kdata = idata2.kdata;
+    args2.odata.max_kdata = idata2.kdata;
 
     cout << "\t\t" << client_name << "-rebalance: read " << idata2.obj
         << ". size: " << args2.odata.size << " version: " << args2.odata.version
@@ -406,9 +410,9 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   }
 
   cout << "\t\t" << client_name << "-rebalance: o1 is "
-      << args1.odata.kdata.encoded() << ","
+      << args1.odata.max_kdata.encoded() << ","
       << args1.odata.name  << " with size " << args1.odata.size
-      << " , o2 is " << args2.odata.kdata.encoded()
+      << " , o2 is " << args2.odata.max_kdata.encoded()
       << "," << args2.odata.name  << " with size " << args2.odata.size
       << std::endl;
 
@@ -446,7 +450,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     map<string, bufferlist> write2_map;
     write2_map.insert(args1.odata.omap.begin(), args1.odata.omap.end());
     write2_map.insert(args2.odata.omap.begin(), args2.odata.omap.end());
-    to_create.push_back(object_data(args2.odata.kdata, o2w, write2_map));
+    to_create.push_back(object_data(args2.odata.max_kdata, o2w, write2_map));
     ops.push_back(make_pair(
 	pair<int, string>(MAKE_OBJECT, o2w),
 	&create[0]));
@@ -464,7 +468,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     client_index_lock.Unlock();
     int target_size_1 = ceil(((int)args1.odata.size + (int)args2.odata.size)
 	/ 2.0);
-    if (args1.odata.kdata != idata1.kdata) {
+    if (args1.odata.max_kdata != idata1.kdata) {
       //this should be true if idata1 is the high object
       target_size_1 = floor(((int)args1.odata.size + (int)args2.odata.size)
 	  / 2.0);
@@ -496,7 +500,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     //at this point, write1_map and write2_map should have the correct pairs
     to_create.push_back(object_data(key_data(write1_map.rbegin()->first),
 	o1w,write1_map));
-    to_create.push_back(object_data(args2.odata.kdata, o2w, write2_map));
+    to_create.push_back(object_data(args2.odata.max_kdata, o2w, write2_map));
     ops.push_back(make_pair(
 	pair<int, string>(MAKE_OBJECT, o1w),
 	&create[0]));
@@ -505,9 +509,9 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
 	&create[1]));
   }
 
-  to_delete.push_back(object_data(args1.odata.kdata, args1.odata.name,
+  to_delete.push_back(object_data(args1.odata.max_kdata, args1.odata.name,
       args1.odata.version));
-  to_delete.push_back(object_data(args2.odata.kdata, args2.odata.name,
+  to_delete.push_back(object_data(args2.odata.max_kdata, args2.odata.name,
       args2.odata.version));
   for (int i = 1; i < 6; i++) {
     ops.push_back(make_pair(make_pair(0,""), &other_ops[i]));
@@ -583,32 +587,28 @@ void KvFlatBtreeAsync::set_up_prefix_index(
   for(vector<object_data>::const_iterator it = to_create.begin();
       it != to_create.end();
       ++it) {
-    vector<string> c;
-    c.push_back(it->kdata.encoded());
-    c.push_back(it->name);
+    create_data c(it->min_kdata, it->max_kdata, it->name);
     idata->to_create.push_back(c);
   }
   for(vector<object_data>::const_iterator it = to_delete.begin();
       it != to_delete.end();
       ++it) {
-    vector<string> d;
-    d.push_back(it->kdata.encoded());
-    d.push_back(it->name);
-    d.push_back(to_string("", it->version));
+    delete_data d(it->min_kdata, it->max_kdata, it->name, it->version);
     idata->to_delete.push_back(d);
   }
   for(vector<object_data>::const_iterator it = to_delete.begin();
       it != to_delete.end();
       ++it) {
     idata->obj = it->name;
-    idata->kdata = it->kdata;
+    idata->min_kdata = it->min_kdata;
+    idata->kdata = it->max_kdata;
     bufferlist insert;
     idata->encode(insert);
-    to_insert[it->kdata.encoded()] = insert;
+    to_insert[it->max_kdata.encoded()] = insert;
     index_data this_entry;
     this_entry.kdata = idata->kdata;
     this_entry.obj = idata->obj;
-    assertions[it->kdata.encoded()] = pair<bufferlist, int>(to_bl(this_entry),
+    assertions[it->max_kdata.encoded()] = pair<bufferlist, int>(to_bl(this_entry),
 	CEPH_OSD_CMPXATTR_OP_EQ);
     cout << "\t\t\t" << client_name << "-setup_prefix: will assert "
 	<< this_entry.str() << std::endl;
@@ -620,8 +620,8 @@ void KvFlatBtreeAsync::set_up_prefix_index(
 
 //some args can be null if there are no corresponding entries in p
 void KvFlatBtreeAsync::set_up_ops(
-    const vector<object_data> &create_data,
-    const vector<object_data> &delete_data,
+    const vector<object_data> &create_vector,
+    const vector<object_data> &delete_vector,
     vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
     const index_data &idata,
     int * err) {
@@ -631,34 +631,32 @@ void KvFlatBtreeAsync::set_up_ops(
   map<string, bufferlist> to_insert;
   std::set<string> to_remove;
   map<string, pair<bufferlist, int> > assertions;
-  if (create_data.size() > 0) {
+  if (create_vector.size() > 0) {
     for (int i = 0; i < (int)idata.to_delete.size(); ++i) {
-      it->first = pair<int, string>(UNWRITE_OBJECT, idata.to_delete[i][1]);
-      set_up_unwrite_object(delete_data[i].version, it->second);
+      it->first = pair<int, string>(UNWRITE_OBJECT, idata.to_delete[i].obj);
+      set_up_unwrite_object(delete_vector[i].version, it->second);
       it++;
     }
   }
   for (int i = 0; i < (int)idata.to_create.size(); ++i) {
-    index_data this_entry;
-    this_entry.obj = idata.to_create[i][1];
-    this_entry.kdata.parse(idata.to_create[i][0]);
-    to_insert[idata.to_create[i][0]] = to_bl(this_entry);
-    if (create_data.size() > 0) {
-      it->first = pair<int, string>(MAKE_OBJECT, idata.to_create[i][1]);
-      set_up_make_object(create_data[i].omap, it->second);
-      it++;
-    }
+    index_data this_entry(idata.to_create[i].min, idata.to_create[i].max,
+	idata.to_create[i].obj);
+    to_insert[idata.to_create[i].max.encoded()] = to_bl(this_entry);
+    it->first = pair<int, string>(MAKE_OBJECT, idata.to_create[i].obj);
+    set_up_make_object(create_vector[i].omap, it->second);
+    it++;
   }
   for (int i = 0; i < (int)idata.to_delete.size(); ++i) {
     index_data this_entry = idata;
-    this_entry.obj = idata.to_delete[i][1];
-    this_entry.kdata.parse(idata.to_delete[i][0]);
+    this_entry.obj = idata.to_delete[i].obj;
+    this_entry.min_kdata = idata.to_delete[i].min;
+    this_entry.kdata = idata.to_delete[i].max;
     cout << "\t\t\t" << client_name << "-setup_ops: will assert "
 	<< this_entry.str() << std::endl;
-    assertions[idata.to_delete[i][0]] = pair<bufferlist, int>(
+    assertions[idata.to_delete[i].max.encoded()] = pair<bufferlist, int>(
 	to_bl(this_entry), CEPH_OSD_CMPXATTR_OP_EQ);
-    to_remove.insert(idata.to_delete[i][0]);
-    it->first = pair<int, string>(REMOVE_OBJECT, idata.to_delete[i][1]);
+    to_remove.insert(idata.to_delete[i].max.encoded());
+    it->first = pair<int, string>(REMOVE_OBJECT, idata.to_delete[i].obj);
     set_up_delete_object(it->second);
     it++;
   }
@@ -726,7 +724,7 @@ int KvFlatBtreeAsync::perform_ops(const string &debug_prefix,
 	//most likely because it changed, in which case it will be -ERANGE
 	cout << debug_prefix << " marking " << it->first.second
 	    << "failed with code" << err << std::endl;
-	if (it->first.second == (*idata.to_delete.begin())[0]) {
+	if (it->first.second == (*idata.to_delete.begin()).max.encoded()) {
 	  if (cleanup(idata, -EFIRSTOBJ) == -ESUICIDE) {
 	    return -ESUICIDE;
 	  }
@@ -818,19 +816,21 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
     //this happens if the split or rebalance failed to mark the first object,
     //meaning only the index needs to be changed.
     //restore objects that had been marked unwritable.
-    for(vector<vector<string> >::const_iterator it =
+    for(vector<delete_data >::const_iterator it =
 	idata.to_delete.begin();
 	it != idata.to_delete.end(); ++it) {
       index_data this_entry;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
-      new_index[(*it)[0]] = to_bl(this_entry);
+      this_entry.obj = (*it).obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
+      new_index[it->max.encoded()] = to_bl(this_entry);
       this_entry = idata;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
+      this_entry.obj = it->obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
       cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
   	<< this_entry.str() << std::endl;
-      assertions[(*it)[0]] =
+      assertions[it->max.encoded()] =
 	  pair<bufferlist, int>(to_bl(this_entry),
 	      CEPH_OSD_CMPXATTR_OP_EQ);
     }
@@ -858,19 +858,21 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
     //special case of rolling back that does not have to deal with new objects.
 
     //restore objects that had been marked unwritable.
-    vector<vector<string> >::const_iterator it;
+    vector<delete_data >::const_iterator it;
     for(it = idata.to_delete.begin();
 	it != idata.to_delete.end(); ++it) {
       index_data this_entry;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
-      new_index[(*it)[0]] = to_bl(this_entry);
+      this_entry.obj = (*it).obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
+      new_index[it->max.encoded()] = to_bl(this_entry);
       this_entry = idata;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
+      this_entry.obj = it->obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
       cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
   	<< this_entry.str() << std::endl;
-      assertions[(*it)[0]] =
+      assertions[it->max.encoded()] =
 	  pair<bufferlist, int>(to_bl(this_entry),
 	      CEPH_OSD_CMPXATTR_OP_EQ);
     }
@@ -880,16 +882,16 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
     if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
       return -ESUICIDE;
     }
-    cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+    cout << "\t\t\t" << client_name << "-cleanup: restoring " << it->obj
 	<< std::endl;
-    err = io_ctx.operate((*it)[1], &restore);
+    err = io_ctx.operate(it->obj, &restore);
     if (err < 0) {
       //i.e., -ECANCELED because the object was already restored by someone
       //else
-	cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+	cout << "\t\t\t" << client_name << "-cleanup: restoring " << it->obj
 	  << " failed with " << err << std::endl;
     } else {
-      cout << "\t\t\t" << client_name << "-cleanup: restored " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: restored " << it->obj
 	   << std::endl;
     }
 
@@ -943,7 +945,7 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
     map<std::string, pair<bufferlist, int> > assertions;
 
     //mark the objects to be created. if someone else already has, die.
-    for(vector<vector<string> >::const_reverse_iterator it =
+    for(vector<create_data >::const_reverse_iterator it =
 	idata.to_create.rbegin();
 	it != idata.to_create.rend(); ++it) {
       librados::ObjectWriteOperation rm;
@@ -951,30 +953,34 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
       if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
 	return -ESUICIDE;
       }
-      cout << "\t\t\t" << client_name << "-cleanup: marking " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: marking " << it->obj
 	<< std::endl;
-      err = io_ctx.operate((*it)[1], &rm);
+      err = io_ctx.operate(it->obj, &rm);
       if (err < 0) {
-	cout << "\t\t\t" << client_name << "-cleanup: marking " << (*it)[1]
+	cout << "\t\t\t" << client_name << "-cleanup: marking " << it->obj
             << " failed with " << err << std::endl;
       } else {
-      cout << "\t\t\t" << client_name << "-cleanup: marked " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: marked " << it->obj
         << std::endl;
       }
     }
 
     //restore objects that had been marked unwritable.
-    for(vector<vector<string> >::const_iterator it =
+    for(vector<delete_data >::const_iterator it =
 	idata.to_delete.begin();
 	it != idata.to_delete.end(); ++it) {
       index_data this_entry;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
-      new_index[(*it)[0]] = to_bl(this_entry);
+      this_entry.obj = (*it).obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
+      new_index[it->max.encoded()] = to_bl(this_entry);
       this_entry = idata;
-      this_entry.obj = (*it)[1];
-      this_entry.kdata.parse((*it)[0]);
-      assertions[(*it)[0]] =
+      this_entry.obj = it->obj;
+      this_entry.min_kdata = it->min;
+      this_entry.kdata = it->max;
+      cout << "\t\t\t" << client_name << "-cleanup: will assert index contains "
+  	<< this_entry.str() << std::endl;
+      assertions[it->max.encoded()] =
 	  pair<bufferlist, int>(to_bl(this_entry),
 	      CEPH_OSD_CMPXATTR_OP_EQ);
       librados::ObjectWriteOperation restore;
@@ -984,15 +990,15 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
       if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
 	return -ESUICIDE;
       }
-      cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: restoring " << it->obj
           << std::endl;
-      err = io_ctx.operate((*it)[1], &restore);
+      err = io_ctx.operate(it->obj, &restore);
       if (err == -ENOENT) {
 	//it had gotten far enough to be rolled forward - unmark the objects
 	//and roll forward.
 	cout << "\t\t\t" << client_name << "-cleanup: roll forward instead"
 	    << std::endl;
-	for(vector<vector<string> >::const_iterator cit =
+	for(vector<create_data >::const_iterator cit =
 	    idata.to_create.begin();
 	    cit != idata.to_create.end(); ++cit) {
 	  librados::ObjectWriteOperation res;
@@ -1001,46 +1007,46 @@ int KvFlatBtreeAsync::cleanup(const index_data &idata, const int &errno) {
 	      == 1 ) {
 	    return -ECANCELED;
 	  }
-	  cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*cit)[1]
+	  cout << "\t\t\t" << client_name << "-cleanup: restoring " << cit->obj
 	    << std::endl;
-	  err = io_ctx.operate((*cit)[1], &res);
+	  err = io_ctx.operate(cit->obj, &res);
 	  if (err < 0) {
 	    cout << "\t\t\t" << client_name << "-cleanup: restoring "
-		<< (*cit)[1] << " failed with " << err << std::endl;
+		<< cit->obj << " failed with " << err << std::endl;
 	  }
-	  cout << "\t\t\t" << client_name << "-cleanup: restored " << (*cit)[1]
+	  cout << "\t\t\t" << client_name << "-cleanup: restored " << cit->obj
 	    << std::endl;
 	}
 	return cleanup(idata, -ENOENT);
       } else if (err < 0) {
 	//i.e., -ECANCELED because the object was already restored by someone
 	//else
-	  cout << "\t\t\t" << client_name << "-cleanup: restoring " << (*it)[1]
+	  cout << "\t\t\t" << client_name << "-cleanup: restoring " << it->obj
 	    << " failed with " << err << std::endl;
       } else {
-	cout << "\t\t\t" << client_name << "-cleanup: restored " << (*it)[1]
+	cout << "\t\t\t" << client_name << "-cleanup: restored " << it->obj
              << std::endl;
       }
     }
 
     //remove the new objects
-    for(vector<vector<string> >::const_reverse_iterator it =
+    for(vector<create_data >::const_reverse_iterator it =
 	idata.to_create.rbegin();
 	it != idata.to_create.rend(); ++it) {
-      to_remove.insert((*it)[0]);
+      to_remove.insert(it->max.encoded());
       librados::ObjectWriteOperation rm;
       rm.remove();
       if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)() == 1 ) {
 	return -ESUICIDE;
       }
-      cout << "\t\t\t" << client_name << "-cleanup: removing " << (*it)[1]
+      cout << "\t\t\t" << client_name << "-cleanup: removing " << it->obj
           << std::endl;
-      err = io_ctx.operate((*it)[1], &rm);
+      err = io_ctx.operate(it->obj, &rm);
       if (err < 0) {
 	cout << "\t\t\t" << client_name << "-cleanup: failed to remove "
-	    << (*it)[1] << std::endl;
+	    << it->obj << std::endl;
       } else {
-	cout << "\t\t\t" << client_name << "-cleanup: removed " << (*it)[1]
+	cout << "\t\t\t" << client_name << "-cleanup: removed " << it->obj
             << std::endl;
       }
     }
@@ -1701,13 +1707,13 @@ bool KvFlatBtreeAsync::is_consistent() {
       bufferlist::iterator b = it->second.begin();
       idata.decode(b);
       if (idata.prefix != "") {
-	for(vector<vector<string> >::iterator dit = idata.to_delete.begin();
+	for(vector<delete_data>::iterator dit = idata.to_delete.begin();
 	    dit != idata.to_delete.end(); dit++) {
 	  librados::ObjectReadOperation oro;
 	  librados::AioCompletion * aioc = rados.aio_create_completion();
 	  bufferlist un;
 	  oro.getxattr("unwritable", &un, &err);
-	  err = io_ctx.aio_operate((*dit)[1], aioc, &oro, NULL);
+	  err = io_ctx.aio_operate(dit->obj, aioc, &oro, NULL);
 	  aioc->wait_for_safe();
 	  err = aioc->get_return_value();
 	  if (ceph_clock_now(g_ceph_context) - idata.ts > TIMEOUT) {
@@ -1715,25 +1721,25 @@ bool KvFlatBtreeAsync::is_consistent() {
 	      if (err == -ENOENT) {
 		continue;
 	      } else {
-		cout << "Not consistent! reading object " << (*dit)[1]
+		cout << "Not consistent! reading object " << dit->obj
 		<< "returned " << err << std::endl;
 		ret = false;
 		break;
 	      }
 	    }
-	    if (string(un.c_str(), un.length()) != "1" &&
-		aioc->get_version() != atoi((*dit)[2].c_str())) {
-	      cout << "Not consistent! object " << (*dit)[1] << " has been "
+	    if (atoi(string(un.c_str(), un.length()).c_str()) != 1 &&
+		aioc->get_version() != dit->version) {
+	      cout << "Not consistent! object " << dit->obj << " has been "
 		  << " modified since the client died was not cleaned up."
 		  << std::endl;
 	      ret = false;
 	    }
 	  }
-	  special_names.insert((*dit)[1]);
+	  special_names.insert(dit->obj);
 	}
-	for(vector<vector<string> >::iterator cit = idata.to_create.begin();
+	for(vector<create_data >::iterator cit = idata.to_create.begin();
 	    cit != idata.to_create.end(); cit++) {
-	  special_names.insert((*cit)[1]);
+	  special_names.insert(cit->obj);
 	}
       }
       parsed_index.insert(make_pair(it->first, idata.obj));

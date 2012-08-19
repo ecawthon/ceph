@@ -71,6 +71,10 @@ struct key_data {
     return k.encoded() < this->encoded();
   }
 
+  bool operator>(key_data k) const {
+    return k.encoded() > this->encoded();
+  }
+
   /**
    * parses the prefix from encoded and stores the data in this.
    *
@@ -103,6 +107,72 @@ struct key_data {
 };
 WRITE_CLASS_ENCODER(key_data)
 
+struct create_data {
+  key_data min;
+  key_data max;
+  string obj;
+
+  create_data()
+  {}
+
+  create_data(key_data n, key_data x, string o)
+  : min(n),
+    max(x),
+    obj(o)
+  {}
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(min, bl);
+    ::encode(max, bl);
+    ::encode(obj, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(min, p);
+    ::decode(max, p);
+    ::decode(obj, p);
+    DECODE_FINISH(p);
+  }
+};
+WRITE_CLASS_ENCODER(create_data)
+
+struct delete_data {
+  key_data min;
+  key_data max;
+  string obj;
+  uint64_t version;
+
+  delete_data()
+  {}
+
+  delete_data(key_data n, key_data x, string o, uint64_t v)
+  : min(n),
+    max(x),
+    obj(o),
+    version(v)
+  {}
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(min, bl);
+    ::encode(max, bl);
+    ::encode(obj, bl);
+    ::encode(version, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(min, p);
+    ::decode(max, p);
+    ::decode(obj, p);
+    ::decode(version, p);
+    DECODE_FINISH(p);
+  }
+};
+WRITE_CLASS_ENCODER(delete_data)
+
 /**
  * The index object is a key value map that stores
  * the highest key stored in an object as keys, and an index_data
@@ -114,18 +184,20 @@ WRITE_CLASS_ENCODER(key_data)
 struct index_data {
   //"1" if there is a prefix (because a split or merge is
   //in progress), otherwise ""
+  key_data kdata;
+
   string prefix;
+  key_data min_kdata;
+  //the encoded key corresponding to the object
   utime_t ts; //time that a split/merge started
   //objects to be created. the elements have
   //two elements, first the (encoded) key, then the object name.
-  vector<vector<string> > to_create;
+  vector<create_data > to_create;
   //objects to be deleted. The elements have three elements, first,
   //the (encoded) key, then the object name, and finally, the version number of
   //the object to be deleted at the last read.
-  vector<vector<string> > to_delete;
+  vector<delete_data > to_delete;
 
-  //the encoded key corresponding to the object
-  key_data kdata;
   //the name of the object where the key range is located.
   string obj;
 
@@ -134,6 +206,12 @@ struct index_data {
 
   index_data(string raw_key)
   : kdata(raw_key)
+  {}
+
+  index_data(key_data max, key_data min, string o)
+  : kdata(max),
+    min_kdata(min),
+    obj(o)
   {}
 
   bool operator<(const index_data &other) const {
@@ -146,8 +224,9 @@ struct index_data {
   //note that this does not include the key
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
-    ::encode(kdata, bl);
     ::encode(prefix, bl);
+    ::encode(min_kdata, bl);
+    ::encode(kdata, bl);
     ::encode(ts, bl);
     ::encode(prefix, bl);
     ::encode(to_create, bl);
@@ -157,8 +236,9 @@ struct index_data {
   }
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
-    ::decode(kdata, p);
     ::decode(prefix, p);
+    ::decode(min_kdata, p);
+    ::decode(kdata, p);
     ::decode(ts, p);
     ::decode(prefix, p);
     ::decode(to_create, p);
@@ -183,17 +263,17 @@ struct index_data {
     strm << '(' << kdata.encoded() << ',' << prefix;
     if (prefix == "1") {
       strm << ts.sec() << '.' << ts.usec();
-      for(vector<vector<string> >::const_iterator it = to_create.begin();
+      for(vector<create_data>::const_iterator it = to_create.begin();
 	  it != to_create.end(); ++it) {
-	  strm << '(' << (*it)[0] << '|'
-	      << (*it)[1] << ')';
+	  strm << '(' << it->min.encoded() << '|' << it->max.encoded() << '|'
+	      << it->obj << ')';
       }
       strm << ';';
-      for(vector<vector<string> >::const_iterator it = to_delete.begin();
+      for(vector<delete_data >::const_iterator it = to_delete.begin();
 	  it != to_delete.end(); ++it) {
-	  strm << '(' << (*it)[0] << '|'
-	      << (*it)[1] << '|'
-	      << (*it)[2] << ')';
+	  strm << '(' << it->min.encoded() << '|' << it->max.encoded() << '|'
+	      << it->obj << '|'
+	      << it->version << ')';
       }
       strm << ':';
     }
@@ -207,7 +287,8 @@ WRITE_CLASS_ENCODER(index_data)
  * Stores information read from a librados object.
  */
 struct object_data {
-  key_data kdata; //the max key, from the index
+  key_data min_kdata;
+  key_data max_kdata; //the max key, from the index
   string name; //the object's name
   map<std::string, bufferlist> omap; // the omap of the object
   bool unwritable; // an xattr that, if false, means an op is in
@@ -223,26 +304,27 @@ struct object_data {
   {}
 
   object_data(key_data kdat, string the_name)
-  : kdata(kdat),
+  : max_kdata(kdat),
     name(the_name)
   {}
 
   object_data(key_data kdat, string the_name,
       map<std::string, bufferlist> the_omap)
-  : kdata(kdat),
+  : max_kdata(kdat),
     name(the_name),
     omap(the_omap)
   {}
 
   object_data(key_data kdat, string the_name, int the_version)
-  : kdata(kdat),
+  : max_kdata(kdat),
     name(the_name),
     version(the_version)
   {}
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
-    ::encode(kdata, bl);
+    ::encode(min_kdata, bl);
+    ::encode(max_kdata, bl);
     ::encode(name, bl);
     ::encode(omap, bl);
     ::encode(unwritable, bl);
@@ -252,7 +334,8 @@ struct object_data {
   }
   void decode(bufferlist::iterator &p) {
     DECODE_START(1, p);
-    ::decode(kdata, p);
+    ::decode(min_kdata, p);
+    ::decode(max_kdata, p);
     ::decode(name, p);
     ::decode(omap, p);
     ::decode(unwritable, p);
