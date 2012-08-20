@@ -62,7 +62,7 @@ void IndexCache::pop() {
 int IndexCache::get(const string &key, index_data *idata) {
   map<key_data, pair<index_data, utime_t> >::iterator it =
       k2itmap.lower_bound(key_data(key));
-  if (it == k2itmap.end()) {
+  if (it == k2itmap.end() || !(it->second.first.min_kdata < key_data(key))) {
     return -ENODATA;
   } else {
     *idata = it->second.first;
@@ -227,7 +227,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
 	<< '.' << (mytime - this_idata.ts).usec()
 	<< ", timeout is " << TIMEOUT << ")" << std::endl;
       //the client died after deleting the object. clean up.
-      if (cleanup(*idata, -EPREFIX) == -ESUICIDE) {
+      if (cleanup(this_idata, -EPREFIX) == -ESUICIDE) {
         return -ESUICIDE;
       }
       return read_index(key, idata, next_idata, force_update);
@@ -236,6 +236,7 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     icache.push(this_idata.kdata.raw_key, this_idata, mytime);
     icache_lock.Unlock();
   }
+  cout << client_name << "-read_index: idata is " << idata->str() << std::endl;
   idata->kdata.parse(kvmap.begin()->first);
   bufferlist::iterator b = kvmap.begin()->second.begin();
   idata->decode(b);
@@ -292,6 +293,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
     to_create[0].omap.insert(*it);
     it++;
   }
+  to_create[0].min_kdata = idata.min_kdata;
   to_create[0].max_kdata = key_data(to_create[0].omap.rbegin()->first);
 
   //for upper half object
@@ -303,6 +305,7 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   to_create[1].omap.insert(
       ++args.odata.omap.find(to_create[0].omap.rbegin()->first),
       args.odata.omap.end());
+  to_create[1].min_kdata = to_create[0].max_kdata;
 
   //setting up operations
   librados::ObjectWriteOperation owos[6];
@@ -639,7 +642,7 @@ void KvFlatBtreeAsync::set_up_ops(
     }
   }
   for (int i = 0; i < (int)idata.to_create.size(); ++i) {
-    index_data this_entry(idata.to_create[i].min, idata.to_create[i].max,
+    index_data this_entry(idata.to_create[i].max, idata.to_create[i].min,
 	idata.to_create[i].obj);
     to_insert[idata.to_create[i].max.encoded()] = to_bl(this_entry);
     it->first = pair<int, string>(MAKE_OBJECT, idata.to_create[i].obj);
@@ -1161,6 +1164,7 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
   map<std::string,bufferlist> index_map;
   index_data idata;
   idata.obj = client_name;
+  idata.min_kdata.raw_key = "";
   idata.kdata = key_data("");
   index_map["1"] = to_bl(idata);
   make_index.omap_set(index_map);
@@ -1728,7 +1732,7 @@ bool KvFlatBtreeAsync::is_consistent() {
 	      }
 	    }
 	    if (atoi(string(un.c_str(), un.length()).c_str()) != 1 &&
-		aioc->get_version() != dit->version) {
+		aioc->get_version() != (int)dit->version) {
 	      cout << "Not consistent! object " << dit->obj << " has been "
 		  << " modified since the client died was not cleaned up."
 		  << std::endl;
