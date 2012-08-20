@@ -167,7 +167,7 @@ public:
 
   static void aio_set_callback_not_timed(int * err, void *arg);
 
-  static void aio_set_callback_timed(int * err, void *arg);
+  static void aio_callback_timed(int * err, void *arg);
 
   /**
    * Test of correctness for the set, get, and remove methods. Stores two

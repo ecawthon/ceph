@@ -183,12 +183,12 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
-/*  librados::ObjectIterator it;
+  librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
-  }*/
+  }
 
 
   int err = kvs->setup(argc, argv);
@@ -715,7 +715,7 @@ void KvStoreTest::aio_set_callback_not_timed(int * err, void *arg) {
   ops_in_flight_lock->Unlock();
 }
 
-void KvStoreTest::aio_set_callback_timed(int * err, void *arg) {
+void KvStoreTest::aio_callback_timed(int * err, void *arg) {
   timed_args *args = reinterpret_cast<timed_args *>(arg);
   Mutex * ops_in_flight_lock = &args->kvst->ops_in_flight_lock;
   Mutex * data_lock = &args->kvst->data_lock;
@@ -1317,7 +1317,7 @@ void *KvStoreTest::throughput_counter(void * arg) {
     data_lock->Unlock();
 
     ops_count_lock->Lock();
-    if (kvst->ops_count < kvst->entries) {
+    if (kvst->ops_count >= kvst->entries) {
       break;
     }
     ops_count_lock->Unlock();
@@ -1364,7 +1364,7 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
       }
       ops_in_flight++;
       cb_args->sw.start_time();
-      kvs->aio_set(kv.first, kv.second, false, aio_set_callback_timed,
+      kvs->aio_set(kv.first, kv.second, false, aio_callback_timed,
 	  cb_args, &cb_args->err);
 /*      if (err < 0) {
 	cout << "Error setting " << kv << ": " << err << std::endl;
@@ -1382,7 +1382,7 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
       }
       ops_in_flight++;
       cb_args->sw.start_time();
-      kvs->aio_set(kv.first, kv.second, true, aio_set_callback_timed,
+      kvs->aio_set(kv.first, kv.second, true, aio_callback_timed,
 	  cb_args, &cb_args->err);
 /*      if (err < 0 && err != -61) {
 	cout << "Error updating " << kv << ": " << err << std::endl;
@@ -1401,7 +1401,7 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
       key_map.erase(kv.first);
       ops_in_flight++;
       cb_args->sw.start_time();
-      kvs->aio_remove(kv.first, aio_set_callback_timed, cb_args, &cb_args->err);
+      kvs->aio_remove(kv.first, aio_callback_timed, cb_args, &cb_args->err);
 /*      if (err < 0 && err != -61) {
 	cout << "Error removing " << kv << ": " << err << std::endl;
 	return err;
@@ -1419,7 +1419,7 @@ int KvStoreTest::test_teuthology_aio(next_gen_t distr,
       bufferlist val;
       ops_in_flight++;
       cb_args->sw.start_time();
-      kvs->aio_get(kv.first, &cb_args->val, aio_set_callback_timed,
+      kvs->aio_get(kv.first, &cb_args->val, aio_callback_timed,
 	  cb_args, &cb_args->err);
 /*      if (err < 0 && err != -61) {
 	cout << "Error getting " << kv << ": " << err << std::endl;
@@ -1641,8 +1641,8 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
 
 int KvStoreTest::teuthology_tests() {
   int err = 0;
-  //test_teuthology_aio(&KvStoreTest::rand_distr, probs);
-  test_teuthology_sync(&KvStoreTest::rand_distr, probs);
+  test_teuthology_aio(&KvStoreTest::rand_distr, probs);
+  //test_teuthology_sync(&KvStoreTest::rand_distr, probs);
   return err;
 }
 
@@ -1661,11 +1661,7 @@ void KvStoreTest::print_time_data() {
   cout << "\nNumber of initial entries:\t" << entries;
   cout << "\nNumber of operations:\t" << data.latency_datums.size();
   cout << "\nNumber of threads per op:\t" << clients;
-  cout << "\nk:\t\t\t\t" << k;/*
-  cout << "\ncalls to set: " << kvs->opmap['s'];
-  cout << "\ncalls to remove: " << kvs->opmap['r'];
-  cout << "\ncalls to split: ." << kvs->opmap['l'];
-  cout << "\ncalls to rebalance: ." << kvs->opmap['m'];*/
+  cout << "\nk:\t\t\t\t" << k;
   cout << "\n";
   cout << "\n";
   cout << "Average latency:\t" << data.avg_latency;
