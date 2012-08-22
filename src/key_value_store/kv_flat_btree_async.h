@@ -17,6 +17,8 @@
 #include "include/rados.h"
 #include "include/encoding.h"
 #include "common/Mutex.h"
+#include "common/Clock.h"
+#include "global/global_context.h"
 #include "include/rados/librados.hpp"
 #include <cfloat>
 #include <queue>
@@ -36,6 +38,91 @@ enum {
 };
 
 struct rebalance_args;
+
+struct kv_bench_data {
+  //latency
+  double avg_latency;
+  double min_latency;
+  double max_latency;
+  double total_latency;
+  int started_ops;
+  int completed_ops;
+  std::map<uint64_t,uint64_t> freq_map;
+  pair<uint64_t,uint64_t> mode_latency;
+  vector<pair<char, double> > latency_datums;
+
+  //throughput
+  double avg_throughput;
+  double min_throughput;
+  double max_throughput;
+  std::map<uint64_t, uint64_t> interval_to_ops_map;
+  std::map<uint64_t, uint64_t>::iterator it;
+  pair<uint64_t,uint64_t> mode_throughput;
+  kv_bench_data()
+  : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
+    total_latency(0.0),
+    started_ops(0), completed_ops(0),
+    avg_throughput(0.0), min_throughput(DBL_MAX), max_throughput(0.0),
+    it(interval_to_ops_map.begin())
+  {}
+};
+
+class KvStoreTest;
+
+struct StopWatch {
+  utime_t begin_time;
+  utime_t end_time;
+
+  void start_time() {
+    begin_time = ceph_clock_now(g_ceph_context);
+  }
+  void stop_time() {
+    end_time = ceph_clock_now(g_ceph_context);
+  }
+  double get_time() {
+    return (end_time - begin_time) * 1000;
+  }
+  void clear() {
+    begin_time = end_time = utime_t();
+  }
+};
+
+struct timed_args {
+  StopWatch sw;
+  kv_bench_data data;
+  KvStoreTest * kvst;
+  bufferlist val;
+  int err;
+  char op;
+
+  timed_args ()
+  : kvst(NULL),
+    err(0),
+    op(' ')
+  {};
+
+  timed_args (KvStoreTest * k)
+  : kvst(k),
+    err(0),
+    op(' ')
+  {}
+
+  void flush() {
+    sw.stop_time();
+    double time = sw.get_time();
+    sw.clear();
+    data.avg_latency = (data.avg_latency * data.completed_ops + time)
+         / (data.completed_ops + 1);
+    data.completed_ops++;
+    if (time < data.min_latency) {
+       data.min_latency = time;
+    }
+    if (time > data.max_latency) {
+       data.max_latency = time;
+    }
+    data.total_latency += time;
+  }
+};
 
 /**
  * stores information about a key in the index.
@@ -59,6 +146,12 @@ struct key_data {
     raw_key == "" ? prefix = "1" : prefix = "0";
   }
 
+  key_data & operator=(const key_data &k) {
+    raw_key = k.raw_key;
+    prefix = k.prefix;
+    return *this;
+  }
+
   bool operator==(key_data k) const {
     return ((raw_key == k.raw_key) && (prefix == k.prefix));
   }
@@ -68,11 +161,11 @@ struct key_data {
   }
 
   bool operator<(key_data k) const {
-    return k.encoded() < this->encoded();
+    return this->encoded() < k.encoded();
   }
 
   bool operator>(key_data k) const {
-    return k.encoded() > this->encoded();
+    return this->encoded() > k.encoded();
   }
 
   /**
@@ -121,6 +214,13 @@ struct create_data {
     obj(o)
   {}
 
+  create_data & operator=(const create_data &c) {
+    min = c.min;
+    max = c.max;
+    obj = c.obj;
+    return *this;
+  }
+
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
     ::encode(min, bl);
@@ -153,6 +253,15 @@ struct delete_data {
     obj(o),
     version(v)
   {}
+
+  delete_data & operator=(const delete_data &d) {
+    min = d.min;
+    max = d.max;
+    obj = d.obj;
+    version = d.version;
+    return *this;
+  }
+
 
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
@@ -214,6 +323,12 @@ struct index_data {
     obj(o)
   {}
 
+  index_data(create_data c)
+  : kdata(c.max),
+    min_kdata(c.min),
+    obj(c.obj)
+  {}
+
   bool operator<(const index_data &other) const {
     return (kdata.encoded() < other.kdata.encoded());
   }
@@ -228,7 +343,6 @@ struct index_data {
     ::encode(min_kdata, bl);
     ::encode(kdata, bl);
     ::encode(ts, bl);
-    ::encode(prefix, bl);
     ::encode(to_create, bl);
     ::encode(to_delete, bl);
     ::encode(obj, bl);
@@ -240,7 +354,6 @@ struct index_data {
     ::decode(min_kdata, p);
     ::decode(kdata, p);
     ::decode(ts, p);
-    ::decode(prefix, p);
     ::decode(to_create, p);
     ::decode(to_delete, p);
     ::decode(obj, p);
@@ -260,18 +373,19 @@ struct index_data {
    */
   string str() const {
     stringstream strm;
-    strm << '(' << kdata.encoded() << ',' << prefix;
+    strm << '(' << min_kdata.encoded() << "/" << kdata.encoded() << ','
+	<< prefix;
     if (prefix == "1") {
       strm << ts.sec() << '.' << ts.usec();
       for(vector<create_data>::const_iterator it = to_create.begin();
 	  it != to_create.end(); ++it) {
-	  strm << '(' << it->min.encoded() << '|' << it->max.encoded() << '|'
+	  strm << '(' << it->min.encoded() << '/' << it->max.encoded() << '|'
 	      << it->obj << ')';
       }
       strm << ';';
       for(vector<delete_data >::const_iterator it = to_delete.begin();
 	  it != to_delete.end(); ++it) {
-	  strm << '(' << it->min.encoded() << '|' << it->max.encoded() << '|'
+	  strm << '(' << it->min.encoded() << '/' << it->max.encoded() << '|'
 	      << it->obj << '|'
 	      << it->version << ')';
       }
@@ -303,20 +417,23 @@ struct object_data {
   : name(the_name)
   {}
 
-  object_data(key_data kdat, string the_name)
-  : max_kdata(kdat),
+  object_data(key_data min, key_data kdat, string the_name)
+  : min_kdata(min),
+    max_kdata(kdat),
     name(the_name)
   {}
 
-  object_data(key_data kdat, string the_name,
+  object_data(key_data min, key_data kdat, string the_name,
       map<std::string, bufferlist> the_omap)
-  : max_kdata(kdat),
+  : min_kdata(min),
+    max_kdata(kdat),
     name(the_name),
     omap(the_omap)
   {}
 
-  object_data(key_data kdat, string the_name, int the_version)
-  : max_kdata(kdat),
+  object_data(key_data min, key_data kdat, string the_name, int the_version)
+  : min_kdata(min),
+    max_kdata(kdat),
     name(the_name),
     version(the_version)
   {}
@@ -349,19 +466,24 @@ WRITE_CLASS_ENCODER(object_data)
 
 class IndexCache {
 protected:
-  map<key_data, pair<index_data, utime_t> > k2itmap;
-  map<utime_t, key_data> t2kmap;
+  map<key_data, pair<index_data, int> > k2icmap;
+  map<int, key_data> c2kmap;
   int cache_size;
+  int count;
 
 public:
-  IndexCache()
-  : cache_size(100)
+  IndexCache(int n)
+  : cache_size(n),
+    count(0)
   {}
   //pops the last entry if necessary
-  void push(const string &key, const index_data &idata, const utime_t &time);
+  void push(const string &key, const index_data &idata);
+  void push(const index_data &idata);
   void pop();
-  int get(const string &key, index_data *idata);
-  int get(const string &key, index_data *idata, index_data * next_idata);
+  void erase(key_data kdata);
+  int get(const string &key, index_data *idata) const;
+  int get(const string &key, index_data *idata, index_data * next_idata) const;
+  void clear();
 //  int next(const index_data &idata, index_data * out_data);
 //  int prev(const index_data &idata, index_data * out_data);
 };
@@ -421,16 +543,19 @@ protected:
   vector<__useconds_t> waits;
   unsigned wait_ms;
   utime_t TIMEOUT;
-  IndexCache icache;
   int cache_size;
+  double cache_refresh;
 
   //don't use this with aio.
   int wait_index;
 
 
+  map<string, timed_args> latency_map;
+
   Mutex client_index_lock;
   int client_index;
   Mutex icache_lock;
+  IndexCache icache;
   friend struct index_data;
 
   //These read, but do not write, librados objects
@@ -653,19 +778,21 @@ public:
    */
   int suicide();
 
-KvFlatBtreeAsync(int k_val, string name, int marg)
+KvFlatBtreeAsync(int k_val, string name, int cache, double cache_r)
   : k(k_val),
     index_name("index_object"),
-    rados_id("admin"),
+    rados_id(name),
     client_name(string(name).append(".")),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
     TIMEOUT(100000,0),
-    cache_size(10),
+    cache_size(cache),
+    cache_refresh(cache_r),
     wait_index(1),
     client_index_lock("client_index_lock"),
     client_index(0),
-    icache_lock("icache_lock")
+    icache_lock("icache_lock"),
+    icache(cache)
   {}
 
 KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
@@ -681,7 +808,8 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     wait_index(0),
     client_index_lock("client_index_lock"),
     client_index(0),
-    icache_lock("icache_lock")
+    icache_lock("icache_lock"),
+    icache(10)
   {}
 
   /**
@@ -772,6 +900,7 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
 
   void aio_remove(const string &key, callback cb, void *cb_args, int * err);
 
+  void print_time_data();
 
 };
 

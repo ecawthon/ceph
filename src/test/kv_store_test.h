@@ -22,23 +22,6 @@
 using namespace std;
 using ceph::bufferlist;
 
-struct StopWatch {
-  utime_t begin_time;
-  utime_t end_time;
-
-  void start_time() {
-    begin_time = ceph_clock_now(g_ceph_context);
-  }
-  void stop_time() {
-    end_time = ceph_clock_now(g_ceph_context);
-  }
-  double get_time() {
-    return (end_time - begin_time) * 1000;
-  }
-  void clear() {
-    begin_time = end_time = utime_t();
-  }
-};
 
 struct set_args {
   KeyValueStructure * kvs;
@@ -53,56 +36,6 @@ struct rm_args {
   StopWatch sw;
 };
 
-struct kv_bench_data {
-  //latency
-  double avg_latency;
-  double min_latency;
-  double max_latency;
-  double total_latency;
-  int started_ops;
-  int completed_ops;
-  std::map<uint64_t,uint64_t> freq_map;
-  pair<uint64_t,uint64_t> mode_latency;
-  vector<pair<char, double> > latency_datums;
-
-  //throughput
-  double avg_throughput;
-  double min_throughput;
-  double max_throughput;
-  std::map<uint64_t, uint64_t> interval_to_ops_map;
-  std::map<uint64_t, uint64_t>::iterator it;
-  pair<uint64_t,uint64_t> mode_throughput;
-  kv_bench_data()
-  : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
-    total_latency(0.0),
-    started_ops(0), completed_ops(0),
-    avg_throughput(0.0), min_throughput(DBL_MAX), max_throughput(0.0),
-    it(interval_to_ops_map.begin())
-  {}
-};
-
-class KvStoreTest;
-
-struct timed_args {
-  StopWatch sw;
-  KvStoreTest * kvst;
-bufferlist val;
-  int err;
-  char op;
-
-  timed_args ()
-  : kvst(NULL),
-    err(0),
-    op(' ')
-  {};
-
-  timed_args (KvStoreTest * k)
-  : kvst(k),
-    err(0),
-    op(' ')
-  {}
-};
-
 typedef pair<string, bufferlist> (KvStoreTest::*next_gen_t)(bool new_elem);
 
 class KvStoreTest {
@@ -113,6 +46,8 @@ protected:
   int entries;
   int ops;
   int clients;
+  int cache_size;
+  double cache_refresh;
   double uincrement;
   int increment;
   int key_size;

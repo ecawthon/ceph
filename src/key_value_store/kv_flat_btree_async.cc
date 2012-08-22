@@ -34,35 +34,153 @@ bool index_data::is_timed_out(utime_t now, utime_t timeout) const {
   return prefix != "" && now - ts > timeout;
 }
 
-void IndexCache::push(const string &key, const index_data &idata,
-    const utime_t &time) {
-//TODO: make index vals store ranges so that stale indexes don't result in
-  //bad writes
-  index_data old_idata;
-  int err = get(key, &old_idata);
-  if (err != -ENODATA) {
-    utime_t old_time = k2itmap[old_idata.kdata].second;
-    t2kmap.erase(old_time);
-    k2itmap.erase(old_idata.kdata);
-  }
-  k2itmap[idata.kdata] = make_pair(idata, time);
-  t2kmap[time] = idata.kdata;
+void IndexCache::clear() {
+  k2icmap.clear();
+  c2kmap.clear();
+}
 
-  if ((int)k2itmap.size() > cache_size) {
+/*efficient push
+ * void IndexCache::push(const string &key, const index_data &idata) {
+  stringstream rs;
+  rs << "key " << key << " idata " << idata.str()
+      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  index_data old_idata;
+  map<key_data, int> old_it = k2icmap.lower_bound(key_data(key));
+  if (old_it != k2icmap.end()) {
+    rs << "removing old entry" << std::endl;
+    c2kmap.erase(old_it->second);
+  }
+  map<key_data, int> new_it = k2icmap.find(idata.kdat);
+  if (new_it != k2icmap.end()) {
+    rs << "removing old idata.kdata entry" << std::endl;
+    int old_time = new_it->second;
+    c2kmap.erase(old_time);
+    k2icmap.erase(new_it);
+  } else {
+    new_it = old_it;
+  }
+  if (old_it != new_it) {
+    //new_it is end and old_it is roughly where idata should be inserted
+    k2icmap.insert((--old_it)++, make_pair(idata, ++count));
+    k2icmap.erase(old_it);
+  }
+  c2kmap.insert(--c2kmap.end(), make_pair(count, idata.kdata));
+  if ((int)k2icmap.size() > cache_size) {
+    rs << "popping" << std::endl;
     pop();
+  }
+  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
+    cout << rs.str() << std::endl;
+    assert(false);
+  }
+}*/
+
+void IndexCache::push(const string &key, const index_data &idata) {
+  if (cache_size == 0) {
+    return;
+  }
+  stringstream rs;
+  rs << "key " << key << " idata " << idata.str()
+      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  index_data old_idata;
+  map<key_data, pair<index_data, int> >::iterator old_it =
+      k2icmap.lower_bound(key_data(key));
+  if (old_it != k2icmap.end()) {
+    rs << "removing old entry" << std::endl;
+    c2kmap.erase(old_it->second.second);
+    k2icmap.erase(old_it);
+  }
+  if (k2icmap.count(idata.kdata) > 0) {
+    rs << "removing old idata.kdata entry" << std::endl;
+    int old_time = k2icmap[idata.kdata].second;
+    c2kmap.erase(old_time);
+    k2icmap.erase(idata.kdata);
+  }
+  k2icmap[idata.kdata] = make_pair(idata, ++count);
+  c2kmap[count] = idata.kdata;
+  if ((int)k2icmap.size() > cache_size) {
+    rs << "popping" << std::endl;
+    pop();
+  }
+  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
+    cout << rs.str() << std::endl;
+    assert(false);
+  }
+}
+
+void IndexCache::push(const index_data &idata) {
+  if (cache_size == 0) {
+    return;
+  }
+  stringstream rs;
+  rs << " idata " << idata.str()
+      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  if (k2icmap.count(idata.kdata) > 0) {
+    rs << "removing old entry" << std::endl;
+    int old_time = k2icmap[idata.kdata].second;
+    c2kmap.erase(old_time);
+    k2icmap.erase(idata.kdata);
+  }
+  k2icmap[idata.kdata] = make_pair(idata, ++count);
+  c2kmap[count] = idata.kdata;
+
+  if ((int)k2icmap.size() > cache_size) {
+    rs << "popping" << std::endl;
+    pop();
+  }
+  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
+      << c2kmap.size()
+      << std::endl;
+  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
+    cout << rs.str() << std::endl;
+    assert(false);
   }
 }
 
 void IndexCache::pop() {
-  map<utime_t, key_data>::reverse_iterator it = t2kmap.rbegin();
-  k2itmap.erase(it->second);
-  t2kmap.erase(it->first);
+  if (cache_size == 0) {
+    return;
+  }
+  map<int, key_data>::iterator it = c2kmap.begin();
+  int time = it->first;
+  key_data kdata = it->second;
+  k2icmap.erase(kdata);
+  c2kmap.erase(time);
 }
 
-int IndexCache::get(const string &key, index_data *idata) {
-  map<key_data, pair<index_data, utime_t> >::iterator it =
-      k2itmap.lower_bound(key_data(key));
-  if (it == k2itmap.end() || !(it->second.first.min_kdata < key_data(key))) {
+void IndexCache::erase(key_data kdata) {
+  if (cache_size == 0) {
+    return;
+  }
+  if (k2icmap.count(kdata) > 0) {
+    int c = k2icmap[kdata].second;
+    k2icmap.erase(kdata);
+    c2kmap.erase(c);
+  }
+}
+
+int IndexCache::get(const string &key, index_data *idata) const {
+  if (cache_size == 0) {
+    return -ENODATA;
+  }
+  if ((int)k2icmap.size() == 0) {
+    return -ENODATA;
+  }
+  map<key_data, pair<index_data, int> >::const_iterator it =
+      k2icmap.lower_bound(key_data(key));
+  if (it == k2icmap.end() || !(it->second.first.min_kdata < key_data(key))) {
     return -ENODATA;
   } else {
     *idata = it->second.first;
@@ -71,19 +189,25 @@ int IndexCache::get(const string &key, index_data *idata) {
 }
 
 int IndexCache::get(const string &key, index_data *idata,
-    index_data *next_idata) {
-  map<key_data, pair<index_data, utime_t> >::const_iterator it =
-      k2itmap.lower_bound(key_data(key));
-  if (it == k2itmap.end()) {
+    index_data *next_idata) const {
+  if (cache_size == 0) {
     return -ENODATA;
-  } else if (it->second.first.min_kdata > key_data(key)){
-    //stale, should be reread.
+  }
+  map<key_data, pair<index_data, int> >::const_iterator it =
+      k2icmap.lower_bound(key_data(key));
+  if (it == k2icmap.end() || ++it == k2icmap.end()) {
     return -ENODATA;
   } else {
-    *idata = it->second.first;
-    it++;
-    if (it != k2itmap.end()) {
-      *next_idata = it->second.first;
+    --it;
+    if (!(it->second.first.min_kdata < key_data(key))){
+      //stale, should be reread.
+      return -ENODATA;
+    } else {
+      *idata = it->second.first;
+      it++;
+      if (it != k2icmap.end()) {
+	*next_idata = it->second.first;
+      }
     }
   }
   return 0;
@@ -154,7 +278,7 @@ int KvFlatBtreeAsync::prev(const index_data &idata, index_data * out_data) {
   bufferlist outbl;
   err = io_ctx.exec(index_name,"kvs", "get_prev_idata", inbl, outbl);
   if (err < 0){
-    cout << "\t\t\t" << client_name << "-next: getting index failed with error "
+    cout << "\t\t\t" << client_name << "-prev: getting index failed with error "
 	<< err << std::endl;
     if (idata.is_timed_out(ceph_clock_now(g_ceph_context),TIMEOUT)) {
       cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;
@@ -182,14 +306,19 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
   if (!force_update) {
     cout << "\t" << client_name << "-read_index: getting index_data for " << key
 	<< " from cache" << std::endl;
+    icache_lock.Lock();
     if (next_idata != NULL) {
       err = icache.get(key, idata, next_idata);
     } else {
       err = icache.get(key, idata);
     }
+    icache_lock.Unlock();
 
     if (err == 0) {
+      cout << "CACHE SUCCESS" << std::endl;
       return err;
+    } else {
+      cout << "NOT IN CACHE" << std::endl;
     }
   }
 
@@ -202,7 +331,9 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
   std::map<std::string, bufferlist> kvmap;
   std::map<std::string, bufferlist> dupmap;
   oro.omap_get_vals_by_keys(key_set, &dupmap, &err);
-  oro.omap_get_vals(key_data(key).encoded(), cache_size / 5, &kvmap,&err);
+  oro.omap_get_vals(key_data(key).encoded(),
+      (cache_size / cache_refresh >= 2? cache_size / cache_refresh: 2),
+      &kvmap,&err);
   err = io_ctx.operate(index_name, &oro, NULL);
   utime_t mytime = ceph_clock_now(g_ceph_context);
   if (err < 0){
@@ -233,22 +364,26 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
       return read_index(key, idata, next_idata, force_update);
     }
     icache_lock.Lock();
-    icache.push(this_idata.kdata.raw_key, this_idata, mytime);
+    icache.push(this_idata);
     icache_lock.Unlock();
   }
-  cout << client_name << "-read_index: idata is " << idata->str() << std::endl;
-  idata->kdata.parse(kvmap.begin()->first);
   bufferlist::iterator b = kvmap.begin()->second.begin();
   idata->decode(b);
+  idata->kdata.parse(kvmap.begin()->first);
+  cout << "\t" << client_name << "-read_index: kvmap_size is " << kvmap.size()
+      << ", idata is " << idata->str() << std::endl;
+
+  assert(idata->obj != "");
   icache_lock.Lock();
-  icache.push(key, *idata, mytime);
+  icache.push(key, *idata);
   icache_lock.Unlock();
+
   if (next_idata != NULL && idata->kdata.prefix != "1") {
     next_idata->kdata.parse((++kvmap.begin())->first);
     bufferlist::iterator nb = (++kvmap.begin())->second.begin();
     next_idata->decode(nb);
     icache_lock.Lock();
-    icache.push(key, *next_idata, mytime);
+    icache.push(*next_idata);
     icache_lock.Unlock();
   }
   return err;
@@ -268,8 +403,8 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   err = read_object(idata.obj, &args);
   args.odata.max_kdata = idata.kdata;
   if (err < 0) {
-    cout << "\t\t" << client_name << "-split: read object got " << err
-	<< std::endl;
+    cout << "\t\t" << client_name << "-split: read object " << args.odata.name
+	<< " got " << err << std::endl;
     return err;
   }
 
@@ -281,8 +416,8 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   //for prefix index
   vector<object_data> to_create;
   vector<object_data> to_delete;
-  to_delete.push_back(object_data(args.odata.max_kdata, args.odata.name));
-  to_delete[0].version = args.odata.version;
+  to_delete.push_back(object_data(idata.min_kdata,
+      args.odata.max_kdata, args.odata.name, args.odata.version));
 
   //for lower half object
   map<std::string, bufferlist>::const_iterator it = args.odata.omap.begin();
@@ -298,14 +433,13 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
 
   //for upper half object
   client_index_lock.Lock();
-  to_create.push_back(object_data(
+  to_create.push_back(object_data(to_create[0].max_kdata,
         args.odata.max_kdata,
         to_string(client_name, client_index++)));
   client_index_lock.Unlock();
   to_create[1].omap.insert(
       ++args.odata.omap.find(to_create[0].omap.rbegin()->first),
       args.odata.omap.end());
-  to_create[1].min_kdata = to_create[0].max_kdata;
 
   //setting up operations
   librados::ObjectWriteOperation owos[6];
@@ -328,7 +462,16 @@ int KvFlatBtreeAsync::split(const index_data &idata) {
   }
   cout << "\t\t" << client_name << "-split: done splitting." << std::endl;
   /////END CRITICAL SECTION/////
-
+  icache_lock.Lock();
+  for (vector<delete_data>::iterator it = out_data.to_delete.begin();
+      it != out_data.to_delete.end(); ++it) {
+    icache.erase(it->max);
+  }
+  for (vector<create_data>::iterator it = out_data.to_create.begin();
+      it != out_data.to_create.end(); ++it) {
+    icache.push(index_data(*it));
+  }
+  icache_lock.Unlock();
   return err;
 }
 
@@ -358,7 +501,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     if (err == -ERANGE) {
       cout << "\t\t" << client_name << "-rebalance: this is the only node, "
   	  << "so aborting" << std::endl;
-      return -EBALANCE;
+      return -EUCLEAN;
     } else if (err < 0) {
       return err;
     }
@@ -372,6 +515,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       }
       return err;
     }
+    args2.odata.min_kdata = idata1.min_kdata;
     args2.odata.max_kdata = idata1.kdata;
 
     //read the second object
@@ -381,6 +525,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       cout << "reading " << idata1.obj << " failed with " << err << std::endl;
       return err;
     }
+    args1.odata.min_kdata = idata2.min_kdata;
     args1.odata.max_kdata = idata2.kdata;
 
     cout << "\t\t" << client_name << "-rebalance: read " << idata2.obj
@@ -394,6 +539,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       cout << "reading " << idata1.obj << " failed with " << err << std::endl;
       return err;
     }
+    args1.odata.min_kdata = idata1.min_kdata;
     args1.odata.max_kdata = idata1.kdata;
 
     args2.bound = 2 * k + 1;
@@ -405,6 +551,7 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
       }
       return err;
     }
+    args2.odata.min_kdata = idata2.min_kdata;
     args2.odata.max_kdata = idata2.kdata;
 
     cout << "\t\t" << client_name << "-rebalance: read " << idata2.obj
@@ -453,7 +600,8 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
     map<string, bufferlist> write2_map;
     write2_map.insert(args1.odata.omap.begin(), args1.odata.omap.end());
     write2_map.insert(args2.odata.omap.begin(), args2.odata.omap.end());
-    to_create.push_back(object_data(args2.odata.max_kdata, o2w, write2_map));
+    to_create.push_back(object_data(args1.odata.min_kdata,
+	args2.odata.max_kdata, o2w, write2_map));
     ops.push_back(make_pair(
 	pair<int, string>(MAKE_OBJECT, o2w),
 	&create[0]));
@@ -501,9 +649,11 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
 	<< write1_map.size() << ", write2_map.size() is " << write2_map.size()
 	<< std::endl;
     //at this point, write1_map and write2_map should have the correct pairs
-    to_create.push_back(object_data(key_data(write1_map.rbegin()->first),
+    to_create.push_back(object_data(args1.odata.min_kdata,
+	key_data(write1_map.rbegin()->first),
 	o1w,write1_map));
-    to_create.push_back(object_data(args2.odata.max_kdata, o2w, write2_map));
+    to_create.push_back(object_data( key_data(write1_map.rbegin()->first),
+	args2.odata.max_kdata, o2w, write2_map));
     ops.push_back(make_pair(
 	pair<int, string>(MAKE_OBJECT, o1w),
 	&create[0]));
@@ -512,10 +662,10 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
 	&create[1]));
   }
 
-  to_delete.push_back(object_data(args1.odata.max_kdata, args1.odata.name,
-      args1.odata.version));
-  to_delete.push_back(object_data(args2.odata.max_kdata, args2.odata.name,
-      args2.odata.version));
+  to_delete.push_back(object_data(args1.odata.min_kdata,
+      args1.odata.max_kdata, args1.odata.name, args1.odata.version));
+  to_delete.push_back(object_data(args2.odata.min_kdata,
+      args2.odata.max_kdata, args2.odata.name, args2.odata.version));
   for (int i = 1; i < 6; i++) {
     ops.push_back(make_pair(make_pair(0,""), &other_ops[i]));
   }
@@ -530,6 +680,16 @@ int KvFlatBtreeAsync::rebalance(const index_data &idata1,
   if (err < 0) {
     return err;
   }
+  icache_lock.Lock();
+  for (vector<delete_data>::iterator it = out_data.to_delete.begin();
+      it != out_data.to_delete.end(); ++it) {
+    icache.erase(it->max);
+  }
+  for (vector<create_data>::iterator it = out_data.to_create.begin();
+      it != out_data.to_create.end(); ++it) {
+    icache.push(index_data(*it));
+  }
+  icache_lock.Unlock();
   cout << "\t\t" << client_name << "-rebalance: done rebalancing." << std::endl;
   /////END CRITICAL SECTION/////
   return err;
@@ -609,10 +769,11 @@ void KvFlatBtreeAsync::set_up_prefix_index(
     idata->encode(insert);
     to_insert[it->max_kdata.encoded()] = insert;
     index_data this_entry;
+    this_entry.min_kdata = idata->min_kdata;
     this_entry.kdata = idata->kdata;
     this_entry.obj = idata->obj;
-    assertions[it->max_kdata.encoded()] = pair<bufferlist, int>(to_bl(this_entry),
-	CEPH_OSD_CMPXATTR_OP_EQ);
+    assertions[it->max_kdata.encoded()] = pair<bufferlist, int>
+    (to_bl(this_entry),	CEPH_OSD_CMPXATTR_OP_EQ);
     cout << "\t\t\t" << client_name << "-setup_prefix: will assert "
 	<< this_entry.str() << std::endl;
   }
@@ -1188,14 +1349,18 @@ int KvFlatBtreeAsync::setup(int argc, const char** argv) {
 
 int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
     bool update_on_existing) {
-  cout << client_name << " is setting " << key << std::endl;
+  cout << client_name << " is "
+      << (update_on_existing? "updating " : "setting ")
+      << key << std::endl;
   int err = 0;
   string obj;
   utime_t mytime;
   index_data idata(key);
 
+//  if (cache_size > 2500) latency_map["read index"].sw.start_time();
   cout << "\t" << client_name << ": finding oid" << std::endl;
   err = read_index(key, &idata, NULL, false);
+//  if (cache_size > 2500) latency_map["read index"].flush();
   if (err < 0) {
     cout << "\t" << client_name << ": getting oid failed with code "
 	<< err << std::endl;
@@ -1204,15 +1369,17 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   cout << "\t" << client_name << ": index data is " << idata.str()
       << ", object is " << idata.obj << std::endl;
 
-  set_op(key, val, update_on_existing, idata);
+  err = set_op(key, val, update_on_existing, idata);
 
-  cout << "\t" << client_name << ": finished set and exiting" << std::endl;
+  cout << "\t" << client_name << ": finished set with " << err << std::endl;
   return err;
 }
 
 int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
     bool update_on_existing, index_data &idata) {
   //write
+
+//  if (cache_size > 2500) latency_map["setup for write"].sw.start_time();
   bufferlist inbl;
   omap_set_args args;
   args.bound = 2 * k;
@@ -1228,7 +1395,10 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
   }
   cout << "\t" << client_name << ": inserting " << key << " into object "
       << idata.obj << std::endl;
+//  if (cache_size > 2500) latency_map["setup for write"].flush();
+//  if (cache_size > 2500) latency_map["write operation"].sw.start_time();
   int err = io_ctx.operate(idata.obj, &owo);
+//  if (cache_size > 2500) latency_map["write operation"].flush();
   if (err < 0) {
     cout << "\t" << client_name << ": writing obj failed with "
 	<< err << std::endl;
@@ -1241,6 +1411,7 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
     case -EKEYREJECTED: {
       //the object needs to be split.
       do {
+	if (cache_size > 2500) latency_map["recovery loop"].sw.start_time();
         cout << "\t" << client_name << ": running split on " << idata.obj
             << std::endl;
         err = split(idata);
@@ -1254,13 +1425,12 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
 	  case 1:
 	    return set_op(key, val, update_on_existing, idata);
 	    break;
-	  default:
-	    if (ret == err) {
-	      return err;
-	    }
+	  case 2:
+	    return err;
 	    break;
 	  }
         }
+        if (cache_size > 2500) latency_map["recovery loop"].flush();
       } while (err < 0 && err != -EBALANCE && err != -ENOENT);
       err = read_index(key, &idata, NULL, true);
       if (err < 0) {
@@ -1268,11 +1438,12 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
 	    << err << std::endl;
 	return err;
       }
-      return set(key, val, update_on_existing);
+      return set_op(key, val, update_on_existing, idata);
       break;
     }
     default:
       if (err == -ENOENT || err == -EACCES) {
+	if (err == -ENOENT) cout << "CACHE FAILURE" << std::endl;
 	err = read_index(key, &idata, NULL, true);
 	if (err < 0) {
 	  cout << "\t" << client_name << ": getting oid failed with code "
@@ -1281,13 +1452,13 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
 	}
 	cout << "\t" << client_name << ": index data is " << idata.str()
 	    << ", object is " << idata.obj << std::endl;
-	//idea: we read the time every time we read the index anyway - store it.
 	return set_op(key, val, update_on_existing, idata);
       } else {
 	return err;
       }
     }
   }
+//  cache_size++;
   return 0;
 }
 
@@ -1302,7 +1473,6 @@ int KvFlatBtreeAsync::remove(const string &key) {
 
   cout << "\t" << client_name << ": finding oid" << std::endl;
   err = read_index(key, &idata, &next_idata, false);
-  mytime = ceph_clock_now(g_ceph_context);
   if (err < 0) {
     cout << "getting oid failed with code " << err << std::endl;
     return err;
@@ -1312,10 +1482,11 @@ int KvFlatBtreeAsync::remove(const string &key) {
       << ", next_idata is " << next_idata.str()
       << ", obj is " << obj << std::endl;
 
-  remove_op(key, idata, next_idata);
+  err = remove_op(key, idata, next_idata);
 
-  cout << "\t" << client_name << ": finished remove and exiting" << std::endl;
-  return 0;
+  cout << "\t" << client_name << ": finished remove with " << err
+      << " and exiting" << std::endl;
+  return err;
 }
 
 int KvFlatBtreeAsync::remove_op(const string &key, index_data &idata,
@@ -1364,11 +1535,30 @@ int KvFlatBtreeAsync::remove_op(const string &key, index_data &idata,
           case 1:
             return remove_op(key, idata, next_idata);
             break;
-	  default:
-	    if (ret == err) {
-	      return err;
-	    }
+          case 2:
+            return err;
 	    break;
+          case -EUCLEAN:
+            //this is the only node, so it's ok to go below k.
+            librados::ObjectWriteOperation owo;
+            bufferlist inbl;
+            omap_rm_args args;
+            args.bound = 0;
+            args.omap.insert(key);
+            args.encode(inbl);
+            owo.exec("kvs", "omap_remove", inbl);
+            if ((((KeyValueStructure *)this)->*KvFlatBtreeAsync::interrupt)()
+        	== 1 ) {
+              cout << client_name << " IS SUICIDING!" << std::endl;
+              return -ESUICIDE;
+            }
+            cout << "\t" << client_name << ": removing " << key << " from "
+        	<< idata.obj
+                << std::endl;
+            int err = io_ctx.operate(idata.obj, &owo);
+            if (err == 0) {
+              return 0;
+            }
           }
         }
       } while (err < 0 && err != -EBALANCE && err != -ENOENT);
@@ -1407,7 +1597,8 @@ int KvFlatBtreeAsync::handle_set_rm_errors(int &err, string obj, string key,
     return err;
   } else if (err == -ECANCELED //if an object was unwritable or index changed
       || err == -EPREFIX //if there is currently a prefix
-      || err == -ETIMEDOUT) // if the index changes during the op - i.e. cleanup
+      || err == -ETIMEDOUT// if the index changes during the op - i.e. cleanup
+      || err == -EACCES) //possible if we were acting on old index data
   {
     err = read_index(key, idata, next_idata, true);
     if (err < 0) {
@@ -1419,13 +1610,14 @@ int KvFlatBtreeAsync::handle_set_rm_errors(int &err, string obj, string key,
       //someone else has split or cleaned up or something. start over.
       return 1;//meaning repeat
     }
-  } else if (err != -ETIMEDOUT && err != -ERANGE && err != -EACCES){
+  } else if (err != -ETIMEDOUT && err != -ERANGE && err != -EACCES
+      && err != -EUCLEAN){
     cout << "\t" << client_name
 	<< ": split encountered an unexpected error: " << err
 	<< std::endl;
-    return err;
+    return 2;
   }
-  return 0;
+  return err;
 }
 
 int KvFlatBtreeAsync::get(const string &key, bufferlist *val) {
@@ -1567,26 +1759,26 @@ void KvFlatBtreeAsync::aio_get(const string &key, bufferlist *val,
 }
 
 //int KvFlatBtreeAsync::set_many() {
-  //read the index for the first and last keys and everything between
-    //this goes in an osd class.
-
-  //if (first_idata == last_idata)
-    //no sync needed - insert them all at once with one omap_insert.
-
-  //else
-    //for (idata : idatas)
-      //make an omap of the keys that go in this idata
-      //read the object
-	//if all of the keys fit, return metadata.
-	//else, read all the keys
-      //insert or split
-	//maybe compare the omap to k to determine if read first or write first?
+//  read the index for the first and last keys and everything between
+//    this goes in an osd class.
+//
+//  if (first_idata == last_idata)
+//    no sync needed - insert them all at once with one omap_insert.
+//
+//  else
+//    for (idata : idatas)
+//      make an omap of the keys that go in this idata
+//      read the object
+//	if all of the keys fit, return metadata.
+//	else, read all the keys
+//      insert or split
+//	maybe compare the omap to k to determine if read first or write first?
 //}
 
 int KvFlatBtreeAsync::remove_all() {
   cout << client_name << ": removing all" << std::endl;
   int err = 0;
-  librados::ObjectReadOperation oro;
+/*  librados::ObjectReadOperation oro;
   librados::AioCompletion * oro_aioc = rados.aio_create_completion();
   std::map<std::string, bufferlist> index_set;
   oro.omap_get_vals("",LONG_MAX,&index_set,&err);
@@ -1628,7 +1820,39 @@ int KvFlatBtreeAsync::remove_all() {
       idata.decode(b);
       io_ctx.operate(idata.obj, &sub);
     }
+  }*/
+
+//  icache.clear();
+
+  librados::ObjectIterator it;
+  for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
+    librados::ObjectWriteOperation rm;
+    rm.remove();
+    io_ctx.operate(it->first, &rm);
   }
+
+  librados::ObjectWriteOperation make_index;
+  make_index.create(true);
+  map<std::string,bufferlist> index_map;
+  index_data idata;
+  idata.obj = client_name;
+  idata.min_kdata.raw_key = "";
+  idata.kdata = key_data("");
+  index_map["1"] = to_bl(idata);
+  make_index.omap_set(index_map);
+  err = io_ctx.operate(index_name, &make_index);
+  if (err < 0) {
+    cout << client_name << ": Making the index failed with code " << err
+	<< std::endl;
+    return 0;
+  }
+  cout << client_name << ": created index object" << std::endl;
+
+  librados::ObjectWriteOperation make_max_obj;
+  make_max_obj.create(true);
+  make_max_obj.setxattr("unwritable", to_bl("0"));
+  make_max_obj.setxattr("size", to_bl("0"));
+  err = io_ctx.operate(client_name, &make_max_obj);
   return err;
 }
 
@@ -1979,8 +2203,8 @@ string KvFlatBtreeAsync::str() {
   return ret.str();
 }
 
-/*void KvFlatBtreeAsync::print_time_data() {
-  map<string, latency_breakdown>::iterator it = latency_map.begin();
+void KvFlatBtreeAsync::print_time_data() {
+  map<string, timed_args>::iterator it = latency_map.begin();
   for (it = latency_map.begin(); it != latency_map.end(); ++it) {
     cout << "========================================================\n";
     cout << it->first << ": " << std::endl;
@@ -1992,4 +2216,4 @@ string KvFlatBtreeAsync::str() {
     cout << "========================================================"
 	 << std::endl;
   }
-}*/
+}

@@ -25,6 +25,7 @@ KvStoreTest::KvStoreTest()
   entries(30),
   ops(100),
   clients(5),
+  cache_size(10),
   uincrement(10),
   increment(1),
   key_size(5),
@@ -61,6 +62,10 @@ int KvStoreTest::setup(int argc, const char** argv) {
 	key_size = atoi(args[i+1]);
       } else if (strcmp(args[i], "--valsize") == 0) {
 	val_size = atoi(args[i+1]);
+      } else if (strcmp(args[i], "--cache-size") == 0) {
+	cache_size = atoi(args[i+1]);
+      } else if (strcmp(args[i], "--cache-refresh") == 0) {
+	cache_refresh = 100 / atoi(args[i+1]);
       } else if (strcmp(args[i], "-t") == 0) {
 	max_ops_in_flight = atoi(args[i+1]);
       } else if (strcmp(args[i], "--inc") == 0) {
@@ -132,7 +137,8 @@ int KvStoreTest::setup(int argc, const char** argv) {
     }
   }
 
-  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, client_name, clients);
+  KvFlatBtreeAsync * kvba = new KvFlatBtreeAsync(k, client_name, cache_size,
+      cache_refresh);
   kvs = kvba;
   switch (inject) {
   case 'w':
@@ -183,13 +189,14 @@ int KvStoreTest::setup(int argc, const char** argv) {
     return r;
   }
 
+if (client_name == "admin") {
   librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
     librados::ObjectWriteOperation rm;
     rm.remove();
     io_ctx.operate(it->first, &rm);
   }
-
+}
 
   int err = kvs->setup(argc, argv);
   if (err < 0 && err != -17) {
@@ -400,7 +407,7 @@ int KvStoreTest::test_split_merge() {
   //now removing one key should make it rebalance...
   cout << kvs->str() << std::endl;
   stringstream midkey;
-  midkey << "Key " << 2 * k - 1;
+  midkey << "Key " << 2 * k;
   err = kvs->remove(midkey.str());
   if (err < 0) {
     cout << "[x] Rebalance failed with error " << err;
@@ -549,7 +556,6 @@ int KvStoreTest::test_non_random_insert_gets() {
     cout << "failed forward insertions/deletions. exiting." << std::endl;
     return err;
   }
-
   //now start over and do it backwards
 
   //insert them
@@ -1142,7 +1148,7 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   for(int i = 0; i < 10; i++) {
     string name = KvFlatBtreeAsync::to_string("prados",i);
     cout << "name is " << name << std::endl;
-    kvbas[i] = new KvFlatBtreeAsync(2, name, clients);
+    kvbas[i] = new KvFlatBtreeAsync(2, name, cache_size, cache_refresh);
     kvbas[i]->setup(argc, argv);
   }
 
@@ -1183,7 +1189,7 @@ int KvStoreTest::test_stress_random_set_rms(int argc, const char** argv) {
   //setup kvs
   for(int i = 0; i < clients; i++) {
     kvs_arr[i] = new KvFlatBtreeAsync(k, KvFlatBtreeAsync::to_string("client",i)
-    , clients);
+    , cache_size, cache_refresh);
     err = kvs_arr[i]->setup(argc, argv);
     if (err < 0 && err != -17) {
       cout << "error setting up client " << i << ": " << err << std::endl;
@@ -1568,6 +1574,8 @@ int KvStoreTest::test_teuthology_sync(next_gen_t distr,
     print_time_datum(&cout, *it);
   }
 
+//  kvs->print_time_data();
+
   print_time_data();
   return err;
 }
@@ -1593,19 +1601,19 @@ int KvStoreTest::functionality_tests() {
 int KvStoreTest::stress_tests() {
   int err = 0;
   //kvs->remove_all();
-  //err = test_non_random_insert_gets();
+  err = test_non_random_insert_gets();
   if (err < 0) {
     cout << "non-random inserts and gets failed with code " << err;
     cout << std::endl;
     return err;
   }
-  err = test_random_insertions();
+  //err = test_random_insertions();
   if (err < 0) {
     cout << "random insertions test failed with code " << err;
     cout << std::endl;
     return err;
   }
-  err = test_random_ops();
+  //err = test_random_ops();
   if (err < 0) {
     cout << "random ops test failed with code " << err;
     cout << std::endl;
@@ -1641,8 +1649,8 @@ int KvStoreTest::verification_tests(int argc, const char** argv) {
 
 int KvStoreTest::teuthology_tests() {
   int err = 0;
-  test_teuthology_aio(&KvStoreTest::rand_distr, probs);
-  //test_teuthology_sync(&KvStoreTest::rand_distr, probs);
+  //test_teuthology_aio(&KvStoreTest::rand_distr, probs);
+  test_teuthology_sync(&KvStoreTest::rand_distr, probs);
   return err;
 }
 

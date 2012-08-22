@@ -225,7 +225,6 @@ static int check_writable(cls_method_context_t hctx) {
     return r;
   }
   if (string(bl.c_str(), bl.length()) == "1") {
-    cout << "osd class: it's unwritable" << std::endl;
     return -EACCES;
   } else{
     return 0;
@@ -503,6 +502,17 @@ static int omap_remove(cls_method_context_t hctx,
     return r;
   }
 
+  //first make sure the object is writable
+  //time["check-xattr"].sw.start_time();
+  r = check_writable(hctx);
+  //time["check-xattr"].flush();
+  //time["error"].sw.start_time();
+  if (r < 0) {
+    //time["error"].flush();
+    return r;
+  }
+  //time["error"].flush();
+
   //check for existance of the key first
   //time["check-existing"].sw.start_time();
   for (set<string>::const_iterator it = omap.begin();
@@ -518,17 +528,6 @@ static int omap_remove(cls_method_context_t hctx,
     }
   }
   //time["check-existing"].flush();
-
-  //first make sure the object is writable
-  //time["check-xattr"].sw.start_time();
-  r = check_writable(hctx);
-  //time["check-xattr"].flush();
-  //time["error"].sw.start_time();
-  if (r < 0) {
-    //time["error"].flush();
-    return r;
-  }
-  //time["error"].flush();
 
   //fail if removing from an object with only bound entries.
   bufferlist old_size;
