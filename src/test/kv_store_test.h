@@ -23,6 +23,84 @@ using namespace std;
 using ceph::bufferlist;
 
 
+struct kv_bench_data {
+  JSONFormatter jf;
+
+  //latency
+  double avg_latency;
+  double min_latency;
+  double max_latency;
+  double total_latency;
+  int started_ops;
+  int completed_ops;
+  std::map<uint64_t,uint64_t> freq_map;
+  pair<uint64_t,uint64_t> mode_latency;
+  vector<pair<char, double> > latency_datums;
+
+  kv_bench_data()
+  : avg_latency(0.0), min_latency(DBL_MAX), max_latency(0.0),
+    total_latency(0.0),
+    started_ops(0), completed_ops(0)
+  { }
+};
+
+class KvStoreTest;
+
+struct StopWatch {
+  utime_t begin_time;
+  utime_t end_time;
+
+  void start_time() {
+    begin_time = ceph_clock_now(g_ceph_context);
+  }
+  void stop_time() {
+    end_time = ceph_clock_now(g_ceph_context);
+  }
+  double get_time() {
+    return (end_time - begin_time) * 1000;
+  }
+  void clear() {
+    begin_time = end_time = utime_t();
+  }
+};
+
+struct timed_args {
+  StopWatch sw;
+  //kv_bench_data data;
+  KvStoreTest * kvst;
+  bufferlist val;
+  int err;
+  char op;
+
+  timed_args ()
+  : kvst(NULL),
+    err(0),
+    op(' ')
+  {};
+
+  timed_args (KvStoreTest * k)
+  : kvst(k),
+    err(0),
+    op(' ')
+  {}
+
+/*  void flush() {
+    sw.stop_time();
+    double time = sw.get_time();
+    sw.clear();
+    data.avg_latency = (data.avg_latency * data.completed_ops + time)
+         / (data.completed_ops + 1);
+    data.completed_ops++;
+    if (time < data.min_latency) {
+       data.min_latency = time;
+    }
+    if (time > data.max_latency) {
+       data.max_latency = time;
+    }
+    data.total_latency += time;
+  }*/
+};
+
 struct set_args {
   KeyValueStructure * kvs;
   string key;
@@ -63,8 +141,6 @@ protected:
   Mutex data_lock;
   int ops_in_flight;
   int max_ops_in_flight;
-  Mutex ops_count_lock;
-  int ops_count;
 
   /*
    * rados_id	op_char	latency
