@@ -35,87 +35,35 @@ bool index_data::is_timed_out(utime_t now, utime_t timeout) const {
 }
 
 void IndexCache::clear() {
-  k2icmap.clear();
-  c2kmap.clear();
+  k2itmap.clear();
+  t2kmap.clear();
 }
-
-/*efficient push
- * void IndexCache::push(const string &key, const index_data &idata) {
-  stringstream rs;
-  rs << "key " << key << " idata " << idata.str()
-      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
-      << c2kmap.size()
-      << std::endl;
-  index_data old_idata;
-  map<key_data, int> old_it = k2icmap.lower_bound(key_data(key));
-  if (old_it != k2icmap.end()) {
-    rs << "removing old entry" << std::endl;
-    c2kmap.erase(old_it->second);
-  }
-  map<key_data, int> new_it = k2icmap.find(idata.kdat);
-  if (new_it != k2icmap.end()) {
-    rs << "removing old idata.kdata entry" << std::endl;
-    int old_time = new_it->second;
-    c2kmap.erase(old_time);
-    k2icmap.erase(new_it);
-  } else {
-    new_it = old_it;
-  }
-  if (old_it != new_it) {
-    //new_it is end and old_it is roughly where idata should be inserted
-    k2icmap.insert((--old_it)++, make_pair(idata, ++count));
-    k2icmap.erase(old_it);
-  }
-  c2kmap.insert(--c2kmap.end(), make_pair(count, idata.kdata));
-  if ((int)k2icmap.size() > cache_size) {
-    rs << "popping" << std::endl;
-    pop();
-  }
-  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
-      << c2kmap.size()
-      << std::endl;
-  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
-    cout << rs.str() << std::endl;
-    assert(false);
-  }
-}*/
 
 void IndexCache::push(const string &key, const index_data &idata) {
   if (cache_size == 0) {
     return;
   }
   stringstream rs;
-  rs << "key " << key << " idata " << idata.str()
-      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
-      << c2kmap.size()
-      << std::endl;
   index_data old_idata;
-  map<key_data, pair<index_data, int> >::iterator old_it =
-      k2icmap.lower_bound(key_data(key));
-  if (old_it != k2icmap.end()) {
-    rs << "removing old entry" << std::endl;
-    c2kmap.erase(old_it->second.second);
-    k2icmap.erase(old_it);
+  map<key_data, pair<index_data, utime_t> >::iterator old_it =
+      k2itmap.lower_bound(key_data(key));
+  if (old_it != k2itmap.end()) {
+    t2kmap.erase(old_it->second.second);
+    k2itmap.erase(old_it);
   }
-  if (k2icmap.count(idata.kdata) > 0) {
-    rs << "removing old idata.kdata entry" << std::endl;
-    int old_time = k2icmap[idata.kdata].second;
-    c2kmap.erase(old_time);
-    k2icmap.erase(idata.kdata);
+  map<key_data, pair<index_data, utime_t> >::iterator new_it =
+      k2itmap.find(idata.kdata);
+  if (new_it != k2itmap.end()) {
+    utime_t old_time = new_it->second.second;
+    t2kmap.erase(old_time);
   }
-  k2icmap[idata.kdata] = make_pair(idata, ++count);
-  c2kmap[count] = idata.kdata;
-  if ((int)k2icmap.size() > cache_size) {
-    rs << "popping" << std::endl;
+  utime_t time = ceph_clock_now(g_ceph_context);
+  k2itmap[idata.kdata] = make_pair(idata, time);
+  t2kmap[time] = idata.kdata;
+  if ((int)k2itmap.size() > cache_size) {
     pop();
   }
-  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
-      << c2kmap.size()
-      << std::endl;
-  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
-    /*cout << rs.str() << std::endl;*/
-    assert(false);
-  }
+
 }
 
 void IndexCache::push(const index_data &idata) {
@@ -123,29 +71,16 @@ void IndexCache::push(const index_data &idata) {
     return;
   }
   stringstream rs;
-  rs << " idata " << idata.str()
-      << " init k2icmap size: " << k2icmap.size() << " c2kmap size: "
-      << c2kmap.size()
-      << std::endl;
-  if (k2icmap.count(idata.kdata) > 0) {
-    rs << "removing old entry" << std::endl;
-    int old_time = k2icmap[idata.kdata].second;
-    c2kmap.erase(old_time);
-    k2icmap.erase(idata.kdata);
+  if (k2itmap.count(idata.kdata) > 0) {
+    utime_t old_time = k2itmap[idata.kdata].second;
+    t2kmap.erase(old_time);
+    k2itmap.erase(idata.kdata);
   }
-  k2icmap[idata.kdata] = make_pair(idata, ++count);
-  c2kmap[count] = idata.kdata;
-
-  if ((int)k2icmap.size() > cache_size) {
-    rs << "popping" << std::endl;
+  utime_t time = ceph_clock_now(g_ceph_context);
+  k2itmap[idata.kdata] = make_pair(idata, time);
+  t2kmap[time] = idata.kdata;
+  if ((int)k2itmap.size() > cache_size) {
     pop();
-  }
-  rs << "new k2itmap size: " << k2icmap.size() << " t2kmap size: "
-      << c2kmap.size()
-      << std::endl;
-  if (!(k2icmap.size() == c2kmap.size() && (int)k2icmap.size() <= cache_size)) {
-    /*cout << rs.str() << std::endl;*/
-    assert(false);
   }
 }
 
@@ -153,21 +88,21 @@ void IndexCache::pop() {
   if (cache_size == 0) {
     return;
   }
-  map<int, key_data>::iterator it = c2kmap.begin();
-  int time = it->first;
+  map<utime_t, key_data>::iterator it = t2kmap.begin();
+  utime_t time = it->first;
   key_data kdata = it->second;
-  k2icmap.erase(kdata);
-  c2kmap.erase(time);
+  k2itmap.erase(kdata);
+  t2kmap.erase(time);
 }
 
 void IndexCache::erase(key_data kdata) {
   if (cache_size == 0) {
     return;
   }
-  if (k2icmap.count(kdata) > 0) {
-    int c = k2icmap[kdata].second;
-    k2icmap.erase(kdata);
-    c2kmap.erase(c);
+  if (k2itmap.count(kdata) > 0) {
+    utime_t c = k2itmap[kdata].second;
+    k2itmap.erase(kdata);
+    t2kmap.erase(c);
   }
 }
 
@@ -175,12 +110,12 @@ int IndexCache::get(const string &key, index_data *idata) const {
   if (cache_size == 0) {
     return -ENODATA;
   }
-  if ((int)k2icmap.size() == 0) {
+  if ((int)k2itmap.size() == 0) {
     return -ENODATA;
   }
-  map<key_data, pair<index_data, int> >::const_iterator it =
-      k2icmap.lower_bound(key_data(key));
-  if (it == k2icmap.end() || !(it->second.first.min_kdata < key_data(key))) {
+  map<key_data, pair<index_data, utime_t> >::const_iterator it =
+      k2itmap.lower_bound(key_data(key));
+  if (it == k2itmap.end() || !(it->second.first.min_kdata < key_data(key))) {
     return -ENODATA;
   } else {
     *idata = it->second.first;
@@ -193,9 +128,9 @@ int IndexCache::get(const string &key, index_data *idata,
   if (cache_size == 0) {
     return -ENODATA;
   }
-  map<key_data, pair<index_data, int> >::const_iterator it =
-      k2icmap.lower_bound(key_data(key));
-  if (it == k2icmap.end() || ++it == k2icmap.end()) {
+  map<key_data, pair<index_data, utime_t> >::const_iterator it =
+      k2itmap.lower_bound(key_data(key));
+  if (it == k2itmap.end() || ++it == k2itmap.end()) {
     return -ENODATA;
   } else {
     --it;
@@ -205,7 +140,7 @@ int IndexCache::get(const string &key, index_data *idata,
     } else {
       *idata = it->second.first;
       it++;
-      if (it != k2icmap.end()) {
+      if (it != k2itmap.end()) {
 	*next_idata = it->second.first;
       }
     }
@@ -214,13 +149,6 @@ int IndexCache::get(const string &key, index_data *idata,
 }
 
 int KvFlatBtreeAsync::nothing() {
-  return 0;
-}
-
-int KvFlatBtreeAsync::formal_wait() {
-  if (wait_index < (int)waits.size() && waits[wait_index] > 0) {
-    usleep(waits[wait_index++]);
-  }
   return 0;
 }
 
@@ -256,7 +184,7 @@ int KvFlatBtreeAsync::next(const index_data &idata, index_data * out_data) {
     out_data->kdata.parse(kvs.begin()->first);
     bufferlist::iterator b = kvs.begin()->second.begin();
     out_data->decode(b);
-    if (idata.is_timed_out(ceph_clock_now(g_ceph_context),TIMEOUT)) {
+    if (idata.is_timed_out(ceph_clock_now(g_ceph_context),timeout)) {
       /*cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;*/
       //the client died after deleting the object. clean up.
       cleanup(idata, err);
@@ -280,7 +208,7 @@ int KvFlatBtreeAsync::prev(const index_data &idata, index_data * out_data) {
   if (err < 0){
     /*cout << "\t\t\t" << client_name << "-prev: getting index failed with error "
 	<< err << std::endl;*/
-    if (idata.is_timed_out(ceph_clock_now(g_ceph_context),TIMEOUT)) {
+    if (idata.is_timed_out(ceph_clock_now(g_ceph_context),timeout)) {
       /*cout << client_name << " THINKS THE OTHER CLIENT DIED." << std::endl;*/
       //the client died after deleting the object. clean up.
       err = cleanup(idata, err);
@@ -350,13 +278,13 @@ int KvFlatBtreeAsync::read_index(const string &key, index_data * idata,
     bufferlist::iterator blit = bl.begin();
     index_data this_idata;
     this_idata.decode(blit);
-    if (this_idata.is_timed_out(mytime, TIMEOUT)) {
+    if (this_idata.is_timed_out(mytime, timeout)) {
       /*cout << client_name << " THINKS THE OTHER CLIENT DIED. (mytime is "
   	<< mytime.sec() << "." << mytime.usec() << ", idata.ts is "
   	<< this_idata.ts.sec() << "." << this_idata.ts.usec()
   	<< ", it has been " << (mytime - this_idata.ts).sec()
 	<< '.' << (mytime - this_idata.ts).usec()
-	<< ", timeout is " << TIMEOUT << ")" << std::endl;*/
+	<< ", timeout is " << timeout << ")" << std::endl;*/
       //the client died after deleting the object. clean up.
       if (cleanup(this_idata, -EPREFIX) == -ESUICIDE) {
         return -ESUICIDE;
@@ -1257,29 +1185,8 @@ bufferlist KvFlatBtreeAsync::to_bl(const index_data &idata) {
   return bl;
 }
 
-string KvFlatBtreeAsync::to_string_f(string s) {
-  stringstream ret;
-  for (int i = 0; i < (int)s.length(); i++) {
-    if (s[i] == '('
-	|| s[i] == '|'
-	|| s[i] ==  ')'
-	|| s[i] == ';'
-	|| s[i] == ':') {
-      ret << "\\" << s[i];
-    } else {
-      ret << s[i];
-    }
-  }
-  return ret.str();
-}
-
 string KvFlatBtreeAsync::get_name() {
   return rados_id;
-}
-
-void KvFlatBtreeAsync::set_waits(const vector<__useconds_t> &wait) {
-  waits = wait;
-  wait_index = 0;
 }
 
 void KvFlatBtreeAsync::set_inject(injection_t inject, int wait_time) {
@@ -1357,10 +1264,8 @@ int KvFlatBtreeAsync::set(const string &key, const bufferlist &val,
   utime_t mytime;
   index_data idata(key);
 
-//  if (cache_size > 2500) latency_map["read index"].sw.start_time();
   /*cout << "\t" << client_name << ": finding oid" << std::endl;*/
   err = read_index(key, &idata, NULL, false);
-//  if (cache_size > 2500) latency_map["read index"].flush();
   if (err < 0) {
     /*cout << "\t" << client_name << ": getting oid failed with code "
 	<< err << std::endl;*/
@@ -1379,7 +1284,6 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
     bool update_on_existing, index_data &idata) {
   //write
 
-//  if (cache_size > 2500) latency_map["setup for write"].sw.start_time();
   bufferlist inbl;
   omap_set_args args;
   args.bound = 2 * k;
@@ -1395,10 +1299,7 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
   }
   /*cout << "\t" << client_name << ": inserting " << key << " into object "
       << idata.obj << std::endl;*/
-//  if (cache_size > 2500) latency_map["setup for write"].flush();
-//  if (cache_size > 2500) latency_map["write operation"].sw.start_time();
   int err = io_ctx.operate(idata.obj, &owo);
-//  if (cache_size > 2500) latency_map["write operation"].flush();
   if (err < 0) {
     /*cerr << "\t" << client_name << ": writing obj failed with "
 	<< err << std::endl;*/
@@ -1411,8 +1312,7 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
     case -EKEYREJECTED: {
       //the object needs to be split.
       do {
-	//if (cache_size > 2500) latency_map["recovery loop"].sw.start_time();
-        /*cerr << "\t" << client_name << ": running split on " << idata.obj
+	/*cerr << "\t" << client_name << ": running split on " << idata.obj
             << std::endl;*/
         err = read_index(key, &idata, NULL, true);
         err = split(idata);
@@ -1433,7 +1333,6 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
 	    break;
 	  }
         }
-//        if (cache_size > 2500) latency_map["recovery loop"].flush();
       } while (err < 0 && err != -EBALANCE && err != -ENOENT);
       err = read_index(key, &idata, NULL, true);
       if (err < 0) {
@@ -1463,7 +1362,6 @@ int KvFlatBtreeAsync::set_op(const string &key, const bufferlist &val,
       }
     }
   }
-//  cache_size++;
   return 0;
 }
 
@@ -1685,7 +1583,6 @@ int KvFlatBtreeAsync::get_op(const string &key, bufferlist *val,
 
 void *KvFlatBtreeAsync::pset(void *ptr) {
   struct aio_set_args *args = (struct aio_set_args *)ptr;
-//  ((timed_args *)args->cb_args)->sw.start_time();
   *args->err =
       args->kvba->KvFlatBtreeAsync::set((string)args->key,
 	  (bufferlist)args->val, (bool)args->exc);
@@ -1715,7 +1612,6 @@ void KvFlatBtreeAsync::aio_set(const string &key, const bufferlist &val,
 
 void *KvFlatBtreeAsync::prm(void *ptr) {
   struct aio_rm_args *args = (struct aio_rm_args *)ptr;
-//  ((timed_args *)args->cb_args)->sw.start_time();
   *args->err =
       args->kvba->KvFlatBtreeAsync::remove((string)args->key);
   args->cb(args->err, args->cb_args);
@@ -1742,7 +1638,6 @@ void KvFlatBtreeAsync::aio_remove(const string &key,
 
 void *KvFlatBtreeAsync::pget(void *ptr) {
   struct aio_get_args *args = (struct aio_get_args *)ptr;
-//  ((timed_args *)args->cb_args)->sw.start_time();
   *args->err =
       args->kvba->KvFlatBtreeAsync::get((string)args->key,
 	  (bufferlist *)args->val);
@@ -1789,51 +1684,7 @@ void KvFlatBtreeAsync::aio_get(const string &key, bufferlist *val,
 int KvFlatBtreeAsync::remove_all() {
   /*cout << client_name << ": removing all" << std::endl;*/
   int err = 0;
-/*  librados::ObjectReadOperation oro;
-  librados::AioCompletion * oro_aioc = rados.aio_create_completion();
-  std::map<std::string, bufferlist> index_set;
-  oro.omap_get_vals("",LONG_MAX,&index_set,&err);
-  err = io_ctx.aio_operate(index_name, oro_aioc, &oro, NULL);
-  if (err < 0){
-    if (err == -ENOENT) {
-      return 0;
-    }
-    cout << "getting keys failed with error " << err  << std::endl;
-    return err;
-  }
-  oro_aioc->wait_for_safe();
-
-  librados::ObjectWriteOperation rm_index;
-  librados::AioCompletion * rm_index_aioc  = rados.aio_create_completion();
-  map<std::string,bufferlist> new_index;
-  new_index["1"] = index_set["1"];
-  rm_index.omap_clear();
-  rm_index.omap_set(new_index);
-  io_ctx.aio_operate(index_name, rm_index_aioc, &rm_index);
-  err = rm_index_aioc->get_return_value();
-  if (err < 0) {
-    cout << "rm index aioc failed - probably failed assertion. " << err
-          << std::endl;
-    return remove_all();
-  }
-
-  if (index_set.size() != 0) {
-    for (std::map<std::string,bufferlist>::iterator it = index_set.begin();
-        it != index_set.end(); ++it){
-      librados::ObjectWriteOperation sub;
-      if (it->first == "1") {
-	sub.omap_clear();
-      } else {
-	sub.remove();
-      }
-      index_data idata;
-      bufferlist::iterator b = it->second.begin();
-      idata.decode(b);
-      io_ctx.operate(idata.obj, &sub);
-    }
-  }*/
-
-//  icache.clear();
+  icache.clear();
 
   librados::ObjectIterator it;
   for (it = io_ctx.objects_begin(); it != io_ctx.objects_end(); ++it) {
@@ -1918,7 +1769,7 @@ int KvFlatBtreeAsync::get_all_keys_and_values(
 bool KvFlatBtreeAsync::is_consistent() {
   int err;
   bool ret = true;
-  /*cout << client_name << ": checking consistency" << std::endl;*/
+  cout << client_name << ": checking consistency" << std::endl;
   std::map<std::string,bufferlist> index;
   map<std::string, std::set<std::string> > sub_objs;
   librados::ObjectReadOperation oro;
@@ -1929,8 +1780,8 @@ bool KvFlatBtreeAsync::is_consistent() {
     for (librados::ObjectIterator oit = io_ctx.objects_begin();
         oit != io_ctx.objects_end(); ++oit) {
       //if this executes, there are floating objects.
-      /*cout << "Not consistent! found floating object " << oit->first
-             << std::endl;*/
+      cerr << "Not consistent! found floating object " << oit->first
+             << std::endl;
       ret = false;
     }
     return ret;
@@ -1955,22 +1806,22 @@ bool KvFlatBtreeAsync::is_consistent() {
 	  err = io_ctx.aio_operate(dit->obj, aioc, &oro, NULL);
 	  aioc->wait_for_safe();
 	  err = aioc->get_return_value();
-	  if (ceph_clock_now(g_ceph_context) - idata.ts > TIMEOUT) {
+	  if (ceph_clock_now(g_ceph_context) - idata.ts > timeout) {
 	    if (err < 0) {
 	      if (err == -ENOENT) {
 		continue;
 	      } else {
-		/*cout << "Not consistent! reading object " << dit->obj
-		<< "returned " << err << std::endl;*/
+		cerr << "Not consistent! reading object " << dit->obj
+		<< "returned " << err << std::endl;
 		ret = false;
 		break;
 	      }
 	    }
 	    if (atoi(string(un.c_str(), un.length()).c_str()) != 1 &&
 		aioc->get_version() != (int)dit->version) {
-	      /*cout << "Not consistent! object " << dit->obj << " has been "
+	      cerr << "Not consistent! object " << dit->obj << " has been "
 		  << " modified since the client died was not cleaned up."
-		  << std::endl;*/
+		  << std::endl;
 	      ret = false;
 	    }
 	  }
@@ -1993,7 +1844,7 @@ bool KvFlatBtreeAsync::is_consistent() {
     string name = oit->first;
     if (name != index_name && onames.count(name) == 0
 	&& special_names.count(name) == 0) {
-      /*cout << "Not consistent! found floating object " << name << std::endl;*/
+      cerr << "Not consistent! found floating object " << name << std::endl;
       ret = false;
     }
   }
@@ -2012,8 +1863,8 @@ bool KvFlatBtreeAsync::is_consistent() {
     if (it->first != "1" && special_names.count(it->second) == 0 &&
 	err != -ENOENT && (size_int > 2*k|| size_int < k)
 	&& parsed_index.size() > 1) {
-      /*cout << "Not consistent! Object " << *it << " has size " << size_int
-	  << ", which is outside the acceptable range." << std::endl;*/
+      cerr << "Not consistent! Object " << *it << " has size " << size_int
+	  << ", which is outside the acceptable range." << std::endl;
       ret = false;
     }
 
@@ -2023,15 +1874,15 @@ bool KvFlatBtreeAsync::is_consistent() {
       if ((it->first != "1"
 	  && *subit > it->first.substr(1,it->first.length()))
 	  || *subit <= prev) {
-	/*cout << "Not consistent! key " << *subit << " does not belong in "
-	    << *it << std::endl;*/
-	/*cout << "not last element, i.e. " << it->first << " not equal to 1? "
+	cerr << "Not consistent! key " << *subit << " does not belong in "
+	    << *it << std::endl;
+	cerr << "not last element, i.e. " << it->first << " not equal to 1? "
 	    << (it->first != "1") << std::endl
 	    << "greater than " << it->first.substr(1,it->first.length())
 	    <<"? " << (*subit > it->first.substr(1,it->first.length()))
 	    << std::endl
 	    << "less than or equal to " << prev << "? "
-	    << (*subit <= prev) << std::endl;*/
+	    << (*subit <= prev) << std::endl;
 	ret = false;
       }
     }
@@ -2040,7 +1891,10 @@ bool KvFlatBtreeAsync::is_consistent() {
   }
 
   if (!ret) {
-    cout << str();
+    cout << "failed consistency test - see error log" << std::endl;
+    cerr << str();
+  } else {
+    cout << "passed consistency test" << std::endl;
   }
   return ret;
 }
@@ -2212,22 +2066,4 @@ string KvFlatBtreeAsync::str() {
 
   }
   return ret.str();
-}
-
-
-void KvFlatBtreeAsync::print_time_data() {
-/*
-  map<string, timed_args>::iterator it = latency_map.begin();
-  for (it = latency_map.begin(); it != latency_map.end(); ++it) {
-    cout << "========================================================\n";
-    cout << it->first << ": " << std::endl;
-    cout << "Average latency:\t" << it->second.data.avg_latency;
-    cout << "ms\nMinimum latency:\t" << it->second.data.min_latency;
-    cout << "ms\nMaximum latency:\t" << it->second.data.max_latency;
-    cout << "ms\nTotal latency:\t\t" << it->second.data.total_latency;
-    cout << "ms\n";
-    cout << "========================================================"
-	 << std::endl;
-  }
-*/
 }

@@ -30,11 +30,6 @@ public:
    */
   virtual int nothing() = 0;
 
-  /**
-   * Waits for a period determined by the waits vector (does not wait if waits
-   * vector is empty).
-   */
-  virtual int formal_wait() = 0;
 
   /**
    * 10% chance of waiting wait_ms seconds
@@ -56,10 +51,6 @@ public:
    */
   virtual int setup(int argc, const char** argv) = 0;
 
-  /**
-   * set up waitpoints for verification testing
-   */
-  virtual void set_waits(const vector<__useconds_t> &wait) = 0;
 
   virtual void set_inject(injection_t inject, int wait_time) = 0;
 
@@ -110,34 +101,6 @@ public:
       int * err) = 0;
 
   /**
-   * gets keys starting at min_key and ending after max_key or after max_keys
-   * keys in key_set
-   *
-   * @param min_key the key to start at
-   * @param max_key the last key to return, unless max_keys is reached first.
-   * pass NULL to rely on max_keys instead.
-   * @param key_set the keys are stored in this
-   * @param max_keys the number of keys to return, unless max_key is hit first.
-   * pass -1 to max_keys to get all keys in range
-   */
-  //virtual int get_keys_in_range(const string &min_key, const string &max_key,
-  //    std::set<string> *key_set, int max_keys) = 0;
-
-  /**
-   * stores keys and values starting at min_key and ending at max_key
-   * or after max_keys keys in kv_map
-   *
-   * @param min_key the key to start at
-   * @param max_key the key after the last key to return, unless max_keys
-   * is reached first. pass NULL to rely on max_keys instead.
-   * @param kv_map the results are stored here
-   * @param max_keys the number of keys to return, unless max_key is hit first.
-   * pass -1 to max_keys to get all keys in range
-   */
-  //virtual int get_key_vals_in_range(string min_key,
-  //    string max_key, map<string,bufferlist> *kv_map, int max_keys) = 0;
-
-  /**
    * True if the structure meets its own requirements for consistency.
    */
   virtual bool is_consistent() = 0;
@@ -146,8 +109,6 @@ public:
    * prints a string representation of the structure
    */
   virtual string str() = 0;
-
-  virtual void print_time_data() = 0;
 };
 
 

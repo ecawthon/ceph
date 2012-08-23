@@ -217,9 +217,9 @@ omapbench_SOURCES = test/omap_bench.cc
 omapbench_LDADD = librados.la $(LIBGLOBAL_LDA)
 bin_DEBUGPROGRAMS += omapbench
 
-kvstoretest_SOURCES = test/kv_store_test.cc key_value_store/kv_flat_btree_async.cc
-kvstoretest_LDADD = librados.la $(LIBGLOBAL_LDA)
-bin_DEBUGPROGRAMS += kvstoretest
+kvstorebench_SOURCES = test/kv_store_bench.cc key_value_store/kv_flat_btree_async.cc
+kvstorebench_LDADD = librados.la $(LIBGLOBAL_LDA)
+bin_DEBUGPROGRAMS += kvstorebench
 
 multi_stress_watch_SOURCES = test/multi_stress_watch.cc test/rados-api/test.cc
 multi_stress_watch_LDADD = librados.la $(LIBGLOBAL_LDA)

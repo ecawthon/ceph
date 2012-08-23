@@ -116,6 +116,10 @@ struct key_data {
 };
 WRITE_CLASS_ENCODER(key_data)
 
+/**
+ * information about objects to be created by a split or merge - stored in the
+ * index_data.
+ */
 struct create_data {
   key_data min;
   key_data max;
@@ -154,6 +158,10 @@ struct create_data {
 };
 WRITE_CLASS_ENCODER(create_data)
 
+/**
+ * information about objects to be deleted by a split or merge - stored in the
+ * index_data.
+ */
 struct delete_data {
   key_data min;
   key_data max;
@@ -202,25 +210,28 @@ WRITE_CLASS_ENCODER(delete_data)
  * The index object is a key value map that stores
  * the highest key stored in an object as keys, and an index_data
  * as the corresponding value. The index_data contains the encoded
- * high key, the name of the librados object where keys containing
+ * high and low keys (where keys in this object are > min_kdata and
+ *  <= kdata), the name of the librados object where keys containing
  * that range of keys are located, and information about split and
  * merge operations that may need to be cleaned up if a client dies.
  */
 struct index_data {
-  //"1" if there is a prefix (because a split or merge is
-  //in progress), otherwise ""
+  //the encoded key corresponding to the object
   key_data kdata;
 
+  //"1" if there is a prefix (because a split or merge is
+  //in progress), otherwise ""
   string prefix;
+
+  //the kdata of the previous index entry
   key_data min_kdata;
-  //the encoded key corresponding to the object
+
   utime_t ts; //time that a split/merge started
-  //objects to be created. the elements have
-  //two elements, first the (encoded) key, then the object name.
+
+  //objects to be created
   vector<create_data > to_create;
-  //objects to be deleted. The elements have three elements, first,
-  //the (encoded) key, then the object name, and finally, the version number of
-  //the object to be deleted at the last read.
+
+  //objects to be deleted
   vector<delete_data > to_delete;
 
   //the name of the object where the key range is located.
@@ -252,7 +263,6 @@ struct index_data {
   //true if there is a prefix and now - ts > timeout.
   bool is_timed_out(utime_t now, utime_t timeout) const;
 
-  //note that this does not include the key
   void encode(bufferlist &bl) const {
     ENCODE_START(1,1,bl);
     ::encode(prefix, bl);
@@ -278,7 +288,8 @@ struct index_data {
 
   /*
    * Prints a string representation of the information, in the following format:
-   * (key,
+   * (min_kdata/
+   * kdata,
    * prefix
    * ts
    * elements of to_create, organized into (high key| obj name)
@@ -317,7 +328,7 @@ WRITE_CLASS_ENCODER(index_data)
  * Stores information read from a librados object.
  */
 struct object_data {
-  key_data min_kdata;
+  key_data min_kdata; //the max key from the previous index entry
   key_data max_kdata; //the max key, from the index
   string name; //the object's name
   map<std::string, bufferlist> omap; // the omap of the object
@@ -379,43 +390,61 @@ struct object_data {
 };
 WRITE_CLASS_ENCODER(object_data)
 
-
+/**
+ * Structure to store information read from the index for reuse.
+ */
 class IndexCache {
 protected:
-  map<key_data, pair<index_data, int> > k2icmap;
-  map<int, key_data> c2kmap;
+  map<key_data, pair<index_data, utime_t> > k2itmap;
+  map<utime_t, key_data> t2kmap;
   int cache_size;
-  int count;
 
 public:
   IndexCache(int n)
-  : cache_size(n),
-    count(0)
+  : cache_size(n)
   {}
-  //pops the last entry if necessary
+  /**
+   * Inserts idata into the cache and removes whatever key mapped to before.
+   * If the cache is full, pops the oldest entry.
+   */
   void push(const string &key, const index_data &idata);
+
+  /**
+   * Inserts idata into the cache. If idata.kdata is already in the cache,
+   * replaces the old one. Pops the oldest entry if the cache is full.
+   */
   void push(const index_data &idata);
+
+  /**
+   * Removes the oldest entry from the cache
+   */
   void pop();
+
+  /**
+   * Removes the value associated with kdata from both maps
+   */
   void erase(key_data kdata);
+
+  /**
+   * gets the idata where key belongs. If none, returns -ENODATA.
+   */
   int get(const string &key, index_data *idata) const;
+
+  /**
+   * Gets the idata where key goes and the one after it. If there are not
+   * valid entries for both of them, returns -ENODATA.
+   */
   int get(const string &key, index_data *idata, index_data * next_idata) const;
   void clear();
-//  int next(const index_data &idata, index_data * out_data);
-//  int prev(const index_data &idata, index_data * out_data);
 };
-
-/*struct AioOperation {
-  int set_callback(void *cb_arg, callback_t cb);
-  int wait_for_safe();
-  int wait_for_safe_and_cb();
-  bool is_safe();
-  bool is_safe_and_cb();
-  int get_return_value();
-
-};*/
 
 class KvFlatBtreeAsync;
 
+
+/**
+ * These are used internally to translate aio operations into useful thread
+ * arguments.
+ */
 struct aio_set_args {
   KvFlatBtreeAsync * kvba;
   string key;
@@ -447,7 +476,8 @@ struct aio_get_args {
 class KvFlatBtreeAsync : public KeyValueStructure {
 protected:
 
-  //this should not change once operations start being called.
+  //don't change these once operations start being called - they are not
+  //protected with mutexes!
   int k;
   string index_name;
   librados::IoCtx io_ctx;
@@ -456,58 +486,57 @@ protected:
   librados::Rados rados;
   string pool_name;
   injection_t interrupt;
-  vector<__useconds_t> waits;
-  unsigned wait_ms;
-  utime_t TIMEOUT;
+  int wait_ms;
+  utime_t timeout; //declare a client dead if it goes this long without
+		   //finishing a split/merge
   int cache_size;
-  double cache_refresh;
+  double cache_refresh; //read cache_size / cache_refresh entries each time the
+			//index is read
 
-  //don't use this with aio.
-  int wait_index;
-
-
-//  map<string, timed_args> latency_map;
-
+  //shared variables protected with mutexes
   Mutex client_index_lock;
-  int client_index;
+  int client_index; //names of new objects are client_name.client_index
   Mutex icache_lock;
   IndexCache icache;
   friend struct index_data;
 
-  //These read, but do not write, librados objects
-
   /**
    * finds the object in the index with the lowest key value that is greater
-   * than idata.key. If idata.key is the max key, returns -EOVERFLOW. If
+   * than idata.kdata. If idata.kdata is the max key, returns -EOVERFLOW. If
    * idata has a prefix and has timed out, cleans up.
    *
    * @param idata: idata for the object to search for.
    * @param out_data: the idata for the next object.
    *
-   * @pre: idata must contain a key.
+   * @pre: idata must contain a key_data.
    * @post: out_data contains complete information
    */
   int next(const index_data &idata, index_data * out_data);
 
   /**
    * finds the object in the index with the lowest key value that is greater
-   * than idata.key. If idata.key is the lowest key, returns -ERANGE If
+   * than idata.kdata. If idata.kdata is the lowest key, returns -ERANGE If
    * idata has a prefix and has timed out, cleans up.
    *
    * @param idata: idata for the object to search for.
    * @param out_data: the idata for the next object.
    *
-   * @pre: idata must contain a key.
-   * @ost: out_data contains complete information
+   * @pre: idata must contain a key_data.
+   * @post: out_data contains complete information
    */
   int prev(const index_data &idata, index_data * out_data);
 
   /**
-   * finds the index_data where a key belongs.
+   * finds the index_data where a key belongs, from cache if possible. If it
+   * reads the index object, it will read the first cache_size entries after
+   * key and put them in the cache.
    *
    * @param key: the key to search for
    * @param idata: the index_data for the first index value such that idata.key
    * is greater than key.
+   * @param next_idata: if not NULL, this will be set to the idata after idata
+   * @param force_update: if false, will try to read from cache first.
+   *
    * @pre: key is not encoded
    * @post: idata contains complete information
    * stored
@@ -515,16 +544,15 @@ protected:
   int read_index(const string &key, index_data * idata,
       index_data * next_idata, bool force_update);
 
-  //These sometimes modify objects and the index
-
   /**
-   * Reads obj and generates information about it. If necessary, splits it.
+   * Reads obj and generates information about it. Iff the object has >= 2k
+   * entries, reads the whole omap and then splits it.
    *
    * @param idata: index data for the object being split
-   * @param odata: object data read from the object to be split
    * @pre: idata contains a key and an obj
-   * @post: odata has complete information
-   * @return -1 if obj does not need to be split,
+   * @post: idata.obj has been split and icache has been updated
+   * @return -EBALANCE if obj does not need to be split, 0 if split successful,
+   * error from read_object or perform_ops if there is one.
    */
   int split(const index_data &idata);
 
@@ -534,15 +562,12 @@ protected:
    * key.
    *
    * @param idata: index data for the object being rebalanced
-   * @param odata: object data read from idata.obj (if !reverse) or the next
-   * idata in the index (if reverse).
+   * @param next_idata: index data for the next object. If blank, will read.
    * @pre: idata contains a key and an obj
-   * @post: odata has complete information about whichever object it read
-   * @param reverse: if true, ver will be the version of the next object after
-   * o1. This is used when rebalance calls itself on the previous object.
-   * @return -1 if no change needed, -ENOENT if o1 does not exist,
-   * -ECANCELED if the rebalance fails due to another thread (meaning rebalance
-   * should be repeated)
+   * @post: idata.obj has been rebalanced and icache has been updated
+   * @return -EBALANCE if no change needed, -ENOENT if o1 does not exist,
+   * -ECANCELED if second object does not exist, otherwise, error from
+   * perform_ops
    */
   int rebalance(const index_data &idata1, const index_data &next_idata);
 
@@ -553,6 +578,10 @@ protected:
    */
   int read_object(const string &obj, object_data * odata);
 
+  /**
+   * performs a maybe_read_for_balance ObjectOperation so the omap is only
+   * read if the object is out of bounds.
+   */
   int read_object(const string &obj, rebalance_args * args);
 
   /**
@@ -576,10 +605,10 @@ protected:
    * sets up all make, mark, restore, and delete ops, as well as the remove
    * prefix op, based on idata.
    *
-   * @param create_data: vector of data about the objects to be created.
+   * @param create_vector: vector of data about the objects to be created.
    * @pre: entries in create_data must have names and omaps and be in idata
    * order
-   * @param to_delete: vector of data about the objects to be deleted
+   * @param delete_vector: vector of data about the objects to be deleted
    * @pre: entries in to_delete must have versions and be in idata order
    * @param ops: the owos to set up. the pair is a pair of op identifiers
    * and names of objects - set_up_ops fills these in.
@@ -590,8 +619,8 @@ protected:
    * @param err: the int to get the error value for omap_cmp
    */
   void set_up_ops(
-      const vector<object_data> &create_data,
-      const vector<object_data> &delete_data,
+      const vector<object_data> &create_vector,
+      const vector<object_data> &delete_vector,
       vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > * ops,
       const index_data &idata,
       int * err);
@@ -656,33 +685,47 @@ protected:
    */
   int cleanup(const index_data &idata, const int &errno);
 
+  /**
+   * does the ObjectWriteOperation and splits, reads the index, and/or retries
+   * until success.
+   */
   int set_op(const string &key, const bufferlist &val,
       bool update_on_existing, index_data &idata);
 
+  /**
+   * does the ObjectWriteOperation and merges, reads the index, and/or retries
+   * until success.
+   */
   int remove_op(const string &key, index_data &idata, index_data &next_idata);
 
+  /**
+   * does the ObjectWriteOperation and reads the index and/or retries
+   * until success.
+   */
   int get_op(const string &key, bufferlist * val, index_data &idata);
 
+  /**
+   * does the ObjectWriteOperation and splits, reads the index, and/or retries
+   * until success.
+   */
   int handle_set_rm_errors(int &err, string key, string obj,
       index_data * idata, index_data * next_idata);
 
+  /**
+   * called by aio_set, aio_remove, and aio_get, respectively.
+   */
   static void* pset(void *ptr);
-
   static void* prm(void *ptr);
-
   static void* pget(void *ptr);
 public:
+
+
+  //interruption methods, for correctness testing
 
   /**
    * returns 0
    */
   int nothing();
-
-  /**
-   * Waits for a period determined by the waits vector (does not wait if waits
-   * vector is empty).
-   */
-  int formal_wait();
 
   /**
    * 10% chance of waiting wait_ms seconds
@@ -701,10 +744,9 @@ KvFlatBtreeAsync(int k_val, string name, int cache, double cache_r)
     client_name(string(name).append(".")),
     pool_name("data"),
     interrupt(&KeyValueStructure::nothing),
-    TIMEOUT(100000,0),
+    timeout(100000,0),
     cache_size(cache),
     cache_refresh(cache_r),
-    wait_index(1),
     client_index_lock("client_index_lock"),
     client_index(0),
     icache_lock("icache_lock"),
@@ -717,11 +759,7 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
     rados_id(name),
     client_name(string(name).append(".")),
     pool_name("data"),
-    interrupt(&KeyValueStructure::nothing),
-    waits(wait_vector),
-    wait_ms(1000),
-    TIMEOUT(1,0),
-    wait_index(0),
+    timeout(1,0),
     client_index_lock("client_index_lock"),
     client_index(0),
     icache_lock("icache_lock"),
@@ -742,13 +780,10 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
    */
   static bufferlist to_bl(string s);
 
-  static bufferlist to_bl(const index_data &idata);
-
   /**
-   * puts escape characters before any special characters in a string that goes
-   * in a prefix
+   * returns idata encoded
    */
-  string to_string_f(string s);
+  static bufferlist to_bl(const index_data &idata);
 
   /**
    * returns the rados_id of this KvFlatBtreeAsync
@@ -756,12 +791,10 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
   string get_name();
 
   /**
-   * sets up the waitpoints according to wait and resets wait_index
-   *
-   * @param wait: the array of wait times to use
+   * sets this kvba to call inject before every ObjectWriteOperation.
+   * If inject is wait and wait_time is set, wait will have a 10% chance of
+   * sleeping for waite_time miliseconds.
    */
-  void set_waits(const vector<__useconds_t> &wait);
-
   void set_inject(injection_t inject, int wait_time);
 
   /**
@@ -793,30 +826,29 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
 
   /**
    * returns an ASCII representation of the index and sub objects, showing
-   * stats about each object and all omaps.
+   * stats about each object and all omaps. Don't use if you have more than
+   * about 10 objects.
    */
   string str();
 
   int get(const string &key, bufferlist *val);
 
-  //none of these have been updated or tested with multiple clients
-
-  int remove_all();
-
-  int get_all_keys(std::set<string> *keys);
-
-  int get_all_keys_and_values(map<string,bufferlist> *kv_map);
-
-
+  //async versions of these methods
   void aio_get(const string &key, bufferlist *val, callback cb,
       void *cb_args, int * err);
-
   void aio_set(const string &key, const bufferlist &val, bool exclusive,
       callback cb, void * cb_args, int * err);
-
   void aio_remove(const string &key, callback cb, void *cb_args, int * err);
 
-  void print_time_data();
+  //these methods that deal with multiple keys at once are efficient, but make
+  //no guarantees about atomicity!
+
+  /**
+   * Removes all objects and re-creates the index and max objects. Use to reset.
+   */
+  int remove_all();
+  int get_all_keys(std::set<string> *keys);
+  int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 
 };
 
