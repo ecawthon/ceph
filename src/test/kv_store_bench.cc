@@ -228,16 +228,20 @@ pair<string, bufferlist> KvStoreBench::rand_distr(bool new_elem) {
 }
 
 int KvStoreBench::test_random_insertions() {
-  int err[entries];
-  vector<pair<string, bufferlist> > map_vector;
+  int err;
+  map<string, bufferlist> big_map;
   for (int i = 0; i < entries; i++) {
     bufferlist bfr;
     bfr.append(random_string(7));
-    map_vector.push_back(pair<string,bufferlist>(random_string(5), bfr));
+    big_map[random_string(5)] = bfr;
   }
   cout << "testing random insertions";
+  err = kvs->set_many(big_map);
+  if (err < 0) {
+    cout << "error setting things" << std::endl;
+  }
 
-  Mutex::Locker l(ops_in_flight_lock);
+/*  Mutex::Locker l(ops_in_flight_lock);
   for (int i = 0; i < entries; i++) {
     assert(ops_in_flight <= max_ops_in_flight);
     if (ops_in_flight == max_ops_in_flight) {
@@ -267,7 +271,8 @@ int KvStoreBench::test_random_insertions() {
   }
   cout << "random insertions successful" << std::endl;
 
-  return err[0];
+  return err[0];*/
+  return err;
 }
 
 void KvStoreBench::aio_set_callback_not_timed(int * err, void *arg) {
@@ -330,7 +335,7 @@ int KvStoreBench::test_teuthology_aio(next_gen_t distr,
     return err;
   }
 
-  sleep(60);
+  sleep(10);
 
   Mutex::Locker l(ops_in_flight_lock);
   for (int i = 0; i < ops; i++) {

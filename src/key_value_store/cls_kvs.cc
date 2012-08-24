@@ -21,6 +21,7 @@ cls_handle_t h_class;
 cls_method_handle_t h_get_idata_from_key;
 cls_method_handle_t h_get_next_idata;
 cls_method_handle_t h_get_prev_idata;
+cls_method_handle_t h_read_many;
 cls_method_handle_t h_check_writable;
 cls_method_handle_t h_assert_size_in_bound;
 cls_method_handle_t h_omap_insert;
@@ -209,6 +210,49 @@ static int get_prev_idata_op(cls_method_context_t hctx,
     return r;
   } else {
     op.encode(*out);
+    return 0;
+  }
+}
+
+/**
+ * Read all of the index entries where any keys in the map go
+ */
+static int read_many(cls_method_context_t hctx, const set<string> &keys,
+    map<string, bufferlist> * out) {
+  int r = 0;
+  CLS_ERR("reading from a map of size %d, first key encoded is %s",
+      keys.size(), key_data(*keys.begin()).encoded().c_str());
+  r = cls_cxx_map_get_vals(hctx, key_data(*keys.begin()).encoded().c_str(),
+      "", LONG_MAX, out);
+  if (r < 0) {
+    CLS_ERR("getting omap vals failed with error %d", r);
+  }
+
+  CLS_ERR("got map of size %d ", out->size());
+  if (out->size() > 1) {
+    out->erase(out->upper_bound(key_data(*keys.rbegin()).encoded().c_str()),
+      out->end());
+  }
+  CLS_ERR("returning map of size %d", out->size());
+  return r;
+}
+
+static int read_many_op(cls_method_context_t hctx, bufferlist *in,
+    bufferlist *out) {
+  CLS_LOG(20, "read_many_op");
+  set<string> op;
+  map<string, bufferlist> outmap;
+  bufferlist::iterator it = in->begin();
+  try {
+    ::decode(op, it);
+  } catch (buffer::error & err) {
+    return -EINVAL;
+  }
+  int r = read_many(hctx, op, &outmap);
+  if (r < 0) {
+    return r;
+  } else {
+    encode(outmap, *out);
     return 0;
   }
 }
@@ -675,6 +719,9 @@ void __cls_init()
   cls_register_cxx_method(h_class, "get_prev_idata",
                           CLS_METHOD_RD | CLS_METHOD_PUBLIC,
                           get_prev_idata_op, &h_get_prev_idata);
+  cls_register_cxx_method(h_class, "read_many",
+                          CLS_METHOD_RD | CLS_METHOD_PUBLIC,
+                          read_many_op, &h_read_many);
   cls_register_cxx_method(h_class, "check_writable",
                           CLS_METHOD_RD | CLS_METHOD_WR | CLS_METHOD_PUBLIC,
                           check_writable_op, &h_check_writable);

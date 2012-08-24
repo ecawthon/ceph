@@ -81,6 +81,8 @@ public:
    */
   virtual int get(const string &key, bufferlist *val) = 0;
 
+  virtual int set_many(const map<string, bufferlist> &in_map) = 0;
+
   /**
    * stores all keys in keys. set should put them in order by key.
    */

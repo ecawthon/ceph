@@ -35,10 +35,12 @@ enum {
   UNWRITE_OBJECT = 3,
   RESTORE_OBJECT = 4,
   REMOVE_OBJECT = 5,
-  REMOVE_PREFIX = 6
+  REMOVE_PREFIX = 6,
+  ADD_PREFIX_LOCK = 7
 };
 
 struct rebalance_args;
+
 
 /**
  * stores information about a key in the index.
@@ -116,6 +118,73 @@ struct key_data {
 };
 WRITE_CLASS_ENCODER(key_data)
 
+
+/**
+ * Stores information read from a librados object.
+ */
+struct object_data {
+  key_data min_kdata; //the max key from the previous index entry
+  key_data max_kdata; //the max key, from the index
+  string name; //the object's name
+  map<std::string, bufferlist> omap; // the omap of the object
+  bool unwritable; // an xattr that, if false, means an op is in
+		  // progress and other clients should not write to it.
+  uint64_t version; //the version at time of read
+  uint64_t size; //the number of elements in the omap
+
+  object_data()
+  {}
+
+  object_data(string the_name)
+  : name(the_name)
+  {}
+
+  object_data(key_data min, key_data kdat, string the_name)
+  : min_kdata(min),
+    max_kdata(kdat),
+    name(the_name)
+  {}
+
+  object_data(key_data min, key_data kdat, string the_name,
+      map<std::string, bufferlist> the_omap)
+  : min_kdata(min),
+    max_kdata(kdat),
+    name(the_name),
+    omap(the_omap)
+  {}
+
+  object_data(key_data min, key_data kdat, string the_name, int the_version)
+  : min_kdata(min),
+    max_kdata(kdat),
+    name(the_name),
+    version(the_version)
+  {}
+
+  void encode(bufferlist &bl) const {
+    ENCODE_START(1,1,bl);
+    ::encode(min_kdata, bl);
+    ::encode(max_kdata, bl);
+    ::encode(name, bl);
+    ::encode(omap, bl);
+    ::encode(unwritable, bl);
+    ::encode(version, bl);
+    ::encode(size, bl);
+    ENCODE_FINISH(bl);
+  }
+  void decode(bufferlist::iterator &p) {
+    DECODE_START(1, p);
+    ::decode(min_kdata, p);
+    ::decode(max_kdata, p);
+    ::decode(name, p);
+    ::decode(omap, p);
+    ::decode(unwritable, p);
+    ::decode(version, p);
+    ::decode(size, p);
+    DECODE_FINISH(p);
+  }
+};
+WRITE_CLASS_ENCODER(object_data)
+
 /**
  * information about objects to be created by a split or merge - stored in the
  * index_data.
@@ -132,6 +201,12 @@ struct create_data {
   : min(n),
     max(x),
     obj(o)
+  {}
+
+  create_data(object_data o)
+  : min(o.min_kdata),
+    max(o.max_kdata),
+    obj(o.name)
   {}
 
   create_data & operator=(const create_data &c) {
@@ -323,72 +398,6 @@ struct index_data {
   }
 };
 WRITE_CLASS_ENCODER(index_data)
-
-/**
- * Stores information read from a librados object.
- */
-struct object_data {
-  key_data min_kdata; //the max key from the previous index entry
-  key_data max_kdata; //the max key, from the index
-  string name; //the object's name
-  map<std::string, bufferlist> omap; // the omap of the object
-  bool unwritable; // an xattr that, if false, means an op is in
-		  // progress and other clients should not write to it.
-  uint64_t version; //the version at time of read
-  uint64_t size; //the number of elements in the omap
-
-  object_data()
-  {}
-
-  object_data(string the_name)
-  : name(the_name)
-  {}
-
-  object_data(key_data min, key_data kdat, string the_name)
-  : min_kdata(min),
-    max_kdata(kdat),
-    name(the_name)
-  {}
-
-  object_data(key_data min, key_data kdat, string the_name,
-      map<std::string, bufferlist> the_omap)
-  : min_kdata(min),
-    max_kdata(kdat),
-    name(the_name),
-    omap(the_omap)
-  {}
-
-  object_data(key_data min, key_data kdat, string the_name, int the_version)
-  : min_kdata(min),
-    max_kdata(kdat),
-    name(the_name),
-    version(the_version)
-  {}
-
-  void encode(bufferlist &bl) const {
-    ENCODE_START(1,1,bl);
-    ::encode(min_kdata, bl);
-    ::encode(max_kdata, bl);
-    ::encode(name, bl);
-    ::encode(omap, bl);
-    ::encode(unwritable, bl);
-    ::encode(version, bl);
-    ::encode(size, bl);
-    ENCODE_FINISH(bl);
-  }
-  void decode(bufferlist::iterator &p) {
-    DECODE_START(1, p);
-    ::decode(min_kdata, p);
-    ::decode(max_kdata, p);
-    ::decode(name, p);
-    ::decode(omap, p);
-    ::decode(unwritable, p);
-    ::decode(version, p);
-    ::decode(size, p);
-    DECODE_FINISH(p);
-  }
-};
-WRITE_CLASS_ENCODER(object_data)
 
 /**
  * Structure to store information read from the index for reuse.
@@ -776,14 +785,20 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
   static string to_string(string s, int i);
 
   /**
-   * returns a bufferlist containing s
+   * returns in encoded
    */
-  static bufferlist to_bl(string s);
+//  template<typename T>
+  static bufferlist to_bl(const string &in) {
+    bufferlist bl;
+    bl.append(in);
+    return bl;
+  }
 
-  /**
-   * returns idata encoded
-   */
-  static bufferlist to_bl(const index_data &idata);
+  static bufferlist to_bl(const index_data &idata) {
+    bufferlist bl;
+    idata.encode(bl);
+    return bl;
+  }
 
   /**
    * returns the rados_id of this KvFlatBtreeAsync
@@ -847,6 +862,7 @@ KvFlatBtreeAsync(int k_val, string name, vector<__useconds_t> wait_vector)
    * Removes all objects and re-creates the index and max objects. Use to reset.
    */
   int remove_all();
+  int set_many(const map<string, bufferlist> &in_map);
   int get_all_keys(std::set<string> *keys);
   int get_all_keys_and_values(map<string,bufferlist> *kv_map);
 

@@ -719,6 +719,8 @@ void KvFlatBtreeAsync::set_up_ops(
     int * err) {
   vector<pair<pair<int, string>,
     librados::ObjectWriteOperation* > >::iterator it;
+
+  //skip the prefixing part
   for(it = ops->begin(); it->first.first == ADD_PREFIX; it++) {}
   map<string, bufferlist> to_insert;
   std::set<string> to_remove;
@@ -1170,19 +1172,6 @@ string KvFlatBtreeAsync::to_string(string s, int i) {
   stringstream ret;
   ret << s << i;
   return ret.str();
-}
-
-bufferlist KvFlatBtreeAsync::to_bl(string s) {
-  stringstream strm;
-  strm << s;
-  bufferlist bl;
-  bl.append(strm.str());
-  return bl;
-}
-bufferlist KvFlatBtreeAsync::to_bl(const index_data &idata) {
-  bufferlist bl;
-  idata.encode(bl);
-  return bl;
 }
 
 string KvFlatBtreeAsync::get_name() {
@@ -1664,22 +1653,117 @@ void KvFlatBtreeAsync::aio_get(const string &key, bufferlist *val,
   pthread_detach(t);
 }
 
-//int KvFlatBtreeAsync::set_many() {
-//  read the index for the first and last keys and everything between
-//    this goes in an osd class.
-//
-//  if (first_idata == last_idata)
-//    no sync needed - insert them all at once with one omap_insert.
-//
-//  else
-//    for (idata : idatas)
-//      make an omap of the keys that go in this idata
-//      read the object
-//	if all of the keys fit, return metadata.
-//	else, read all the keys
-//      insert or split
-//	maybe compare the omap to k to determine if read first or write first?
-//}
+int KvFlatBtreeAsync::set_many(const map<string, bufferlist> &in_map) {
+  int err = 0;
+  bufferlist inbl;
+  bufferlist outbl;
+  std::set<string> keys;
+
+  map<string, bufferlist> big_map;
+  for (map<string, bufferlist>::const_iterator it = in_map.begin();
+      it != in_map.end(); ++it) {
+    keys.insert(it->first);
+    big_map.insert(*it);
+  }
+
+  ::encode(keys, inbl);
+  librados::AioCompletion * aioc = rados.aio_create_completion();
+  io_ctx.aio_exec(index_name, aioc,  "kvs", "read_many", inbl, &outbl);
+  aioc->wait_for_safe();
+  err = aioc->get_return_value();
+  if (err < 0) {
+    cout << "getting index failed with " << err << std::endl;
+    return err;
+  }
+
+  map<string, bufferlist> imap;//read from the index
+  bufferlist::iterator blit = outbl.begin();
+  ::decode(imap, blit);
+  std::set<string> index_keys;
+  map<key_data, index_data> old_idata_map;
+
+  vector<object_data> to_delete;
+
+  vector<object_data> to_create;
+
+
+  for (map<string, bufferlist>::iterator it = imap.begin(); it != imap.end();
+      ++it){
+    index_data idata;
+    blit = it->second.begin();
+    idata.decode(blit);
+    to_delete.push_back(object_data(idata.min_kdata, idata.kdata, idata.obj));
+    err = read_object(idata.obj, &to_delete[to_delete.size() - 1]);
+    if (err < 0) {
+      cout << "reading " << idata.obj << " failed with " << err << std::endl;
+      return set_many(in_map);
+    }
+
+    old_idata_map[idata.kdata] = idata;
+    big_map.insert(to_delete[to_delete.size() - 1].omap.begin(),
+	to_delete[to_delete.size() - 1].omap.end());
+  }
+
+  to_create.push_back(object_data(
+	to_string(client_name, client_index++)));
+  to_create[0].min_kdata = to_delete[0].min_kdata;
+
+  for(map<string, bufferlist>::iterator it = big_map.begin();
+      it != big_map.end(); ++it) {
+    if (to_create[to_create.size() - 1].omap.size() == 1.5 * k) {
+      to_create[to_create.size() - 1].max_kdata =
+	  key_data(to_create[to_create.size() - 1]
+	                         .omap.rbegin()->first);
+
+      to_create.push_back(object_data(
+    	to_string(client_name, client_index++)));
+      to_create[to_create.size() - 1].min_kdata =
+	  to_create[to_create.size() - 2].max_kdata;
+    }
+
+    to_create[to_create.size() - 1].omap.insert(*it);
+  }
+  to_create[to_create.size() - 1].max_kdata =
+      to_delete[to_delete.size() - 1].max_kdata;
+
+  librados::ObjectWriteOperation owos[2 + 2 * to_delete.size()
+                                      + to_create.size()];
+  vector<pair<pair<int, string>, librados::ObjectWriteOperation*> > ops;
+
+
+  index_data idata;
+  set_up_prefix_index(to_create, to_delete, &owos[0], &idata, &err);
+
+  ops.push_back(make_pair(
+      pair<int, string>(ADD_PREFIX, index_name),
+      &owos[0]));
+  for (int i = 1; i < 2 + 2 * (int)to_delete.size() + (int)to_create.size();
+      i++) {
+    ops.push_back(make_pair(make_pair(0,""), &owos[i]));
+  }
+
+  set_up_ops(to_create, to_delete, &ops, idata, &err);
+
+  /////BEGIN CRITICAL SECTION/////
+  //put prefix on index entry for idata.val
+  err = perform_ops("\t\t" + client_name + "-set_many:", idata, &ops);
+  if (err < 0) {
+    return set_many(in_map);
+  }
+  //cout << "\t\t" << client_name << "-split: done splitting." << std::endl;
+  /////END CRITICAL SECTION/////
+  icache_lock.Lock();
+  for (vector<delete_data>::iterator it = idata.to_delete.begin();
+      it != idata.to_delete.end(); ++it) {
+    icache.erase(it->max);
+  }
+  for (vector<create_data>::iterator it = idata.to_create.begin();
+      it != idata.to_create.end(); ++it) {
+    icache.push(index_data(*it));
+  }
+  icache_lock.Unlock();
+  return err;
+}
 
 int KvFlatBtreeAsync::remove_all() {
   /*cout << client_name << ": removing all" << std::endl;*/
